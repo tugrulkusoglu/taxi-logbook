@@ -1,12 +1,33 @@
 /* ==========================================
    TAXI LOGBOOK — TAXI-CHIRON-01
-   Version 2.2.0
+   Version 3.0.0
    ========================================== */
 
 const STORAGE_KEY = "taxi_trips";
 const SHIFT_KEY = "taxi_shift";
+const ACTIVE_TRIP_KEY = "taxi_active_trip";
 
-// ---------- STORAGE ----------
+let activeTrip = null;
+let pendingTrip = null;
+let gpsWatcher = null;
+let gpsPromise = null;
+let lastPosition = null;
+let lastGpsTime = 0;
+
+const DOUBLE_CLICK_MS = 800;
+
+function nowISO() {
+  return new Date().toISOString();
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  return new Date(value).toLocaleString("tr-TR");
+}
+
+function money(value) {
+  return Number(value || 0).toFixed(2) + " €";
+}
 
 function getTrips() {
   try {
@@ -32,20 +53,22 @@ function saveShift(shift) {
   localStorage.setItem(SHIFT_KEY, JSON.stringify(shift));
 }
 
-// ---------- HELPERS ----------
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
+function saveActiveTrip() {
+  if (activeTrip) {
+    localStorage.setItem(ACTIVE_TRIP_KEY, JSON.stringify(activeTrip));
+  } else {
+    localStorage.removeItem(ACTIVE_TRIP_KEY);
+  }
 }
 
-function nowLocal() {
-  const d = new Date();
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
-}
-
-function money(value) {
-  return Number(value || 0).toFixed(2) + " €";
+function loadActiveTrip() {
+  try {
+    activeTrip = JSON.parse(
+      localStorage.getItem(ACTIVE_TRIP_KEY) || "null"
+    );
+  } catch {
+    activeTrip = null;
+  }
 }
 
 function escapeHTML(value) {
@@ -58,256 +81,542 @@ function escapeHTML(value) {
   }[c]));
 }
 
-// ---------- TRIPS ----------
+/* ---------- GPS ---------- */
 
-function addTrip(data) {
-  const trips = getTrips();
+function getPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Bu tarayıcı GPS konumunu desteklemiyor."));
+      return;
+    }
 
-  const trip = {
-    id: Date.now(),
-    type: data.type,
-    provider: data.provider || "",
-    start: data.start || nowLocal(),
-    end: data.end || "",
-    pickup: data.pickup || "",
-    dropoff: data.dropoff || "",
-    km: Number(data.km || 0),
-    fare: Number(data.fare || 0),
-    payment: data.payment || "",
-    notes: data.notes || "",
-    sendToChiron: data.type === "Normal",
-    date: (data.start || nowLocal()).slice(0, 10)
+    navigator.geolocation.getCurrentPosition(
+      position => resolve({
+        lat: position.coords.latitude,
+        lon: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        time: position.timestamp
+      }),
+      error => {
+        const messages = {
+          1: "Konum izni verilmedi. Tarayıcı ayarlarından GPS izni ver.",
+          2: "GPS konumu alınamadı. Konum servislerini kontrol et.",
+          3: "GPS zaman aşımına uğradı. Tekrar dene."
+        };
+
+        reject(new Error(messages[error.code] || "GPS hatası."));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 20000,
+        maximumAge: 0
+      }
+    );
+  });
+}
+
+function distanceBetween(a, b) {
+  const R = 6371000;
+  const rad = value => value * Math.PI / 180;
+
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+
+  const lat1 = rad(a.lat);
+  const lat2 = rad(b.lat);
+
+  const x =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) *
+    Math.cos(lat2) *
+    Math.sin(dLon / 2) ** 2;
+
+  return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+function addGpsPoint(position) {
+  if (!activeTrip) return;
+
+  const point = {
+    lat: position.coords.latitude,
+    lon: position.coords.longitude,
+    accuracy: position.coords.accuracy,
+    time: position.timestamp
   };
 
-  trips.push(trip);
-  saveTrips(trips);
-  render();
+  if (point.accuracy > 50) return;
 
-  return trip;
+  const previous = activeTrip.lastPoint;
+
+  if (previous) {
+    const meters = distanceBetween(previous, point);
+    const seconds = (point.time - previous.time) / 1000;
+
+    if (meters < 5) return;
+
+    // GPS sıçramalarını ve gerçekçi olmayan hızları ele
+    if (seconds > 0 && meters / seconds > 60) return;
+
+    activeTrip.distanceMeters += meters;
+  }
+
+  activeTrip.route.push(point);
+  activeTrip.lastPoint = point;
+
+  saveActiveTrip();
+  renderActiveTrip();
 }
 
-function deleteTrip(id) {
-  if (!confirm("Bu yolculuk silinsin mi?")) return;
+function startGpsTracking() {
+  if (!navigator.geolocation || gpsWatcher !== null) return;
 
-  saveTrips(getTrips().filter(t => t.id !== id));
-  render();
+  gpsWatcher = navigator.geolocation.watchPosition(
+    addGpsPoint,
+    error => {
+      console.warn("GPS takip hatası:", error.message);
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 3000,
+      timeout: 20000
+    }
+  );
 }
 
-function totalKm(trips = getTrips()) {
-  return trips.reduce((sum, t) => sum + Number(t.km || 0), 0);
+function stopGpsTracking() {
+  if (gpsWatcher !== null && navigator.geolocation) {
+    navigator.geolocation.clearWatch(gpsWatcher);
+  }
+
+  gpsWatcher = null;
 }
 
-function totalFare(trips = getTrips()) {
-  return trips.reduce((sum, t) => sum + Number(t.fare || 0), 0);
-}
+/* ---------- VARDİYA ---------- */
 
-function getChironTrips() {
-  return getTrips().filter(t => t.type === "Normal" && t.sendToChiron);
-}
-
-function getUberTrips() {
-  return getTrips().filter(t => t.type === "Uber");
-}
-
-function getBoltTrips() {
-  return getTrips().filter(t => t.type === "Bolt");
-}
-
-// ---------- SHIFT ----------
-
-function startShift() {
-  const km = document.getElementById("shiftStartKm").value;
-  const time = document.getElementById("shiftStartTime").value || nowLocal();
-
-  if (km === "") {
-    alert("Lütfen başlangıç kilometresini gir.");
+async function startShift() {
+  if (getShift()?.active) {
+    alert("Vardiya zaten açık.");
     return;
   }
 
-  saveShift({
-    startKm: Number(km),
-    startTime: time,
-    endKm: null,
-    endTime: null,
-    active: true
-  });
+  const button = document.getElementById("startShift");
+  button.disabled = true;
 
-  document.getElementById("shiftStartTime").value = time;
-  render();
+  try {
+    const position = await getPosition();
+
+    saveShift({
+      active: true,
+      startTime: nowISO(),
+      startPosition: position,
+      endTime: null,
+      endPosition: null
+    });
+
+    render();
+    alert("Vardiya başlatıldı.");
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+  }
 }
 
-function endShift() {
+async function endShift() {
   const shift = getShift();
 
   if (!shift || !shift.active) {
+    alert("Açık vardiya bulunamadı.");
+    return;
+  }
+
+  if (activeTrip) {
+    alert("Önce devam eden yolculuğu bitir.");
+    return;
+  }
+
+  const button = document.getElementById("endShift");
+  button.disabled = true;
+
+  try {
+    const position = await getPosition();
+
+    shift.active = false;
+    shift.endTime = nowISO();
+    shift.endPosition = position;
+
+    saveShift(shift);
+    render();
+
+    alert("Vardiya bitirildi.");
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+/* ---------- YOLCULUK ---------- */
+
+async function beginTrip(kind) {
+  if (!getShift()?.active) {
     alert("Önce vardiyayı başlatmalısın.");
     return;
   }
 
-  const km = document.getElementById("shiftEndKm").value;
-
-  if (km === "") {
-    alert("Lütfen bitiş kilometresini gir.");
+  if (activeTrip || pendingTrip) {
+    alert("Önce mevcut yolculuğu tamamla.");
     return;
   }
 
-  if (Number(km) < Number(shift.startKm)) {
-    alert("Bitiş kilometresi başlangıç kilometresinden küçük olamaz.");
+  const button = document.querySelector(
+    `.type-btn[data-kind="${kind}"]`
+  );
+
+  if (button) button.disabled = true;
+
+  try {
+    const position = await getPosition();
+
+    activeTrip = {
+      id: Date.now(),
+      type: kind,
+      startTime: nowISO(),
+      endTime: null,
+      startPosition: position,
+      endPosition: null,
+      distanceMeters: 0,
+      route: [],
+      lastPoint: null
+    };
+
+    addGpsPoint({
+      coords: {
+        latitude: position.lat,
+        longitude: position.lon,
+        accuracy: position.accuracy
+      },
+      timestamp: position.time
+    });
+
+    saveActiveTrip();
+    startGpsTracking();
+    render();
+
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function requestTripStart(kind) {
+  if (activeTrip || pendingTrip) {
+    alert("Önce mevcut yolculuğu tamamla.");
     return;
   }
 
-  shift.endKm = Number(km);
-  shift.endTime = document.getElementById("shiftEndTime").value || nowLocal();
-  shift.active = false;
+  const time = Date.now();
 
-  saveShift(shift);
+  if (
+    lastClickKind === kind &&
+    time - lastClickTime <= DOUBLE_CLICK_MS
+  ) {
+    lastClickKind = null;
+    lastClickTime = 0;
+    beginTrip(kind);
+    return;
+  }
+
+  lastClickKind = kind;
+  lastClickTime = time;
+
+  const label = kind.toUpperCase();
+
+  alert(
+    label + " seçildi. Yolculuğu başlatmak için aynı butona tekrar bas."
+  );
+}
+
+let lastClickKind = null;
+let lastClickTime = 0;
+
+async function finishTrip() {
+  if (!activeTrip) {
+    alert("Aktif yolculuk yok.");
+    return;
+  }
+
+  const button = document.getElementById("finishTrip");
+  button.disabled = true;
+
+  try {
+    const position = await getPosition();
+
+    activeTrip.endPosition = position;
+    activeTrip.endTime = nowISO();
+
+    const previous = activeTrip.lastPoint;
+
+    if (previous) {
+      const meters = distanceBetween(previous, position);
+
+      if (meters >= 5 && position.accuracy <= 50) {
+        activeTrip.distanceMeters += meters;
+        activeTrip.route.push(position);
+      }
+    }
+
+    stopGpsTracking();
+
+    pendingTrip = activeTrip;
+    activeTrip = null;
+
+    saveActiveTrip();
+    showFareScreen();
+
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+/* ---------- ÜCRET VE KAYIT ---------- */
+
+function showFareScreen() {
+  if (!pendingTrip) return;
+
+  const card = document.getElementById("fareCard");
+  const details = document.getElementById("tripDetails");
+
+  const trip = pendingTrip;
+
+  const km = trip.distanceMeters / 1000;
+
+  details.innerHTML = `
+    <p><strong>Tür:</strong> ${escapeHTML(trip.type.toUpperCase())}</p>
+    <p><strong>Başlangıç:</strong> ${formatDate(trip.startTime)}</p>
+    <p><strong>Bitiş:</strong> ${formatDate(trip.endTime)}</p>
+    <p><strong>Başlangıç koordinatı:</strong>
+      ${trip.startPosition.lat.toFixed(5)},
+      ${trip.startPosition.lon.toFixed(5)}
+    </p>
+    <p><strong>Varış koordinatı:</strong>
+      ${trip.endPosition.lat.toFixed(5)},
+      ${trip.endPosition.lon.toFixed(5)}
+    </p>
+    <p><strong>GPS mesafesi:</strong> ${km.toFixed(2)} km</p>
+    <p><small>Mesafe GPS noktalarından hesaplanır; gerçek taksimetre mesafesi olmayabilir.</small></p>
+  `;
+
+  document.getElementById("tripFare").value = "";
+  card.hidden = false;
+  card.scrollIntoView({ behavior: "smooth" });
+}
+
+function completeTrip() {
+  if (!pendingTrip) return;
+
+  const fareInput = document.getElementById("tripFare");
+  const fare = Number(fareInput.value);
+
+  if (fareInput.value.trim() === "" || !Number.isFinite(fare) || fare < 0) {
+    alert("Lütfen geçerli bir ücret gir.");
+    return;
+  }
+
+  const trip = {
+    id: pendingTrip.id,
+    type: pendingTrip.type === "normal"
+      ? "Normal"
+      : pendingTrip.type.charAt(0).toUpperCase() + pendingTrip.type.slice(1),
+    start: pendingTrip.startTime,
+    end: pendingTrip.endTime,
+    date: pendingTrip.startTime.slice(0, 10),
+    pickup: "",
+    dropoff: "",
+    startPosition: pendingTrip.startPosition,
+    endPosition: pendingTrip.endPosition,
+    route: pendingTrip.route,
+    km: Number((pendingTrip.distanceMeters / 1000).toFixed(2)),
+    fare,
+    sendToChiron: pendingTrip.type === "normal"
+  };
+
+  const trips = getTrips();
+  trips.push(trip);
+  saveTrips(trips);
+
+  pendingTrip = null;
+  document.getElementById("fareCard").hidden = true;
+
+  render();
+  alert("Yolculuk kaydedildi.");
+}
+
+function cancelPendingTrip() {
+  if (!pendingTrip) return;
+
+  if (!confirm("Bu yolculuk kaydı iptal edilsin mi?")) return;
+
+  pendingTrip = null;
+  document.getElementById("fareCard").hidden = true;
   render();
 }
 
-// ---------- SUMMARY & TABLE ----------
+/* ---------- EKRAN ---------- */
 
-function renderSummary() {
-  const el = document.getElementById("summary");
-  if (!el) return;
+function renderActiveTrip() {
+  const box = document.getElementById("activeTrip");
+  const finish = document.getElementById("finishTrip");
 
-  const trips = getTrips();
-  const uber = getUberTrips();
-  const bolt = getBoltTrips();
-  const normal = getChironTrips();
+  if (!box || !finish) return;
 
-  el.innerHTML = `
-    <div class="summary-item">
-      <strong>${trips.length}</strong>
-      <span>Toplam yolculuk</span>
-    </div>
-    <div class="summary-item">
-      <strong>${totalKm().toFixed(1)} km</strong>
-      <span>Toplam km</span>
-    </div>
-    <div class="summary-item">
-      <strong>${money(totalFare())}</strong>
-      <span>Toplam ciro</span>
-    </div>
-    <div class="summary-item">
-      <strong>${uber.length}</strong>
-      <span>Uber</span>
-    </div>
-    <div class="summary-item">
-      <strong>${bolt.length}</strong>
-      <span>Bolt</span>
-    </div>
-    <div class="summary-item">
-      <strong>${normal.length}</strong>
-      <span>Normal / Chiron</span>
-    </div>
+  if (!activeTrip) {
+    box.textContent = "Aktif yolculuk yok";
+    finish.disabled = true;
+    return;
+  }
+
+  const km = activeTrip.distanceMeters / 1000;
+
+  box.innerHTML = `
+    <strong>${escapeHTML(activeTrip.type.toUpperCase())} yolculuğu devam ediyor</strong><br>
+    Başlangıç: ${formatDate(activeTrip.startTime)}<br>
+    GPS mesafesi: ${km.toFixed(2)} km<br>
+    GPS takibi aktif
   `;
+
+  finish.disabled = false;
+}
+
+function renderShift() {
+  const box = document.getElementById("shiftStatus");
+  if (!box) return;
+
+  const shift = getShift();
+
+  if (!shift) {
+    box.textContent = "Vardiya açık değil";
+  } else if (shift.active) {
+    box.textContent = "Vardiya açık · Başlangıç: " +
+      formatDate(shift.startTime);
+  } else {
+    box.textContent = "Vardiya kapalı · Başlangıç: " +
+      formatDate(shift.startTime) +
+      " · Bitiş: " + formatDate(shift.endTime);
+  }
 }
 
 function renderTrips() {
   const tbody = document.getElementById("tripRows");
   if (!tbody) return;
 
-  const trips = getTrips().slice().reverse();
-
-  tbody.innerHTML = trips.map(t => `
+  tbody.innerHTML = getTrips().slice().reverse().map(trip => `
     <tr>
-      <td>${escapeHTML(t.date || "")}</td>
-      <td>${escapeHTML(t.type || "")}</td>
-      <td>${escapeHTML(t.pickup || "")} → ${escapeHTML(t.dropoff || "")}</td>
-      <td>${Number(t.km || 0).toFixed(1)}</td>
-      <td>${money(t.fare)}</td>
-      <td>${escapeHTML(t.payment || "")}</td>
+      <td>${escapeHTML(trip.date || "")}</td>
+      <td>${escapeHTML(trip.type || "")}</td>
+      <td>${escapeHTML(trip.pickup || "GPS")}</td>
+      <td>${escapeHTML(trip.dropoff || "GPS")}</td>
+      <td>${Number(trip.km || 0).toFixed(2)}</td>
+      <td>${money(trip.fare)}</td>
       <td>
-        <button type="button" class="delete-trip" data-id="${t.id}" title="Sil">✕</button>
+        <button type="button" data-delete="${trip.id}">Sil</button>
       </td>
     </tr>
   `).join("");
 
-  tbody.querySelectorAll(".delete-trip").forEach(btn => {
-    btn.addEventListener("click", () => deleteTrip(Number(btn.dataset.id)));
+  tbody.querySelectorAll("[data-delete]").forEach(button => {
+    button.addEventListener("click", () => {
+      const id = Number(button.dataset.delete);
+
+      if (!confirm("Bu yolculuk silinsin mi?")) return;
+
+      saveTrips(getTrips().filter(t => t.id !== id));
+      render();
+    });
   });
 }
 
-function renderShift() {
-  const shift = getShift();
-  const status = document.getElementById("shiftStatus");
+function renderSummary() {
+  const box = document.getElementById("summary");
+  if (!box) return;
 
-  if (!status) return;
+  const trips = getTrips();
 
-  if (!shift) {
-    status.textContent = "Vardiya açık değil";
-    return;
-  }
+  const km = trips.reduce((sum, t) => sum + Number(t.km || 0), 0);
+  const fare = trips.reduce((sum, t) => sum + Number(t.fare || 0), 0);
 
-  if (shift.active) {
-    status.textContent = `Vardiya açık • Başlangıç: ${shift.startKm} km`;
-  } else {
-    status.textContent = `Vardiya kapalı • ${shift.startKm} → ${shift.endKm} km • ${(shift.endKm - shift.startKm).toFixed(1)} km`;
-  }
+  box.innerHTML = `
+    <div class="summary-item">
+      <strong>${trips.length}</strong>
+      <span>Yolculuk</span>
+    </div>
+    <div class="summary-item">
+      <strong>${km.toFixed(2)} km</strong>
+      <span>Toplam km</span>
+    </div>
+    <div class="summary-item">
+      <strong>${money(fare)}</strong>
+      <span>Toplam ücret</span>
+    </div>
+  `;
 }
 
 function render() {
-  renderSummary();
-  renderTrips();
   renderShift();
+  renderActiveTrip();
+  renderTrips();
+  renderSummary();
 }
 
-// ---------- BACKUP ----------
+/* ---------- YEDEKLEME ---------- */
 
 function exportBackup() {
-  try {
-    const backup = {
-      app: "TAXI-CHIRON-01",
-      version: "2.2.0",
-      exportDate: new Date().toISOString(),
-      trips: getTrips(),
-      shift: getShift()
-    };
+  const data = {
+    app: "TAXI-CHIRON-01",
+    version: "3.0.0",
+    exportDate: nowISO(),
+    trips: getTrips(),
+    shift: getShift(),
+    activeTrip,
+    pendingTrip
+  };
 
-    const blob = new Blob(
-      [JSON.stringify(backup, null, 2)],
-      { type: "application/json" }
-    );
+  const blob = new Blob(
+    [JSON.stringify(data, null, 2)],
+    { type: "application/json" }
+  );
 
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
 
-    link.href = url;
-    link.download = "taxi-logbook-backup-" + today() + ".json";
-    link.style.display = "none";
+  link.href = url;
+  link.download = "taxi-logbook-backup.json";
 
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-
-  } catch (error) {
-    console.error("Backup error:", error);
-    alert("Yedek oluşturulamadı.");
-  }
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
-
-// ---------- RESTORE ----------
 
 function importBackupFile(file) {
   if (!file) return;
 
   const reader = new FileReader();
 
-  reader.onload = function () {
+  reader.onload = () => {
     try {
       const data = JSON.parse(reader.result);
-
       const trips = Array.isArray(data) ? data : data.trips;
 
       if (!Array.isArray(trips)) {
-        throw new Error("Invalid backup");
+        throw new Error("Geçersiz yedek dosyası.");
       }
 
-      if (!confirm(
-        "Yedek geri yüklenecek. Mevcut yolculukların yerine yedek dosyasındaki kayıtlar geçecek. Devam edilsin mi?"
-      )) {
+      if (!confirm("Mevcut yolculukların yerine yedek dosyası yüklensin mi?")) {
         return;
       }
 
@@ -317,137 +626,75 @@ function importBackupFile(file) {
         saveShift(data.shift);
       }
 
+      if (!Array.isArray(data) && data.activeTrip) {
+        activeTrip = data.activeTrip;
+        saveActiveTrip();
+      }
+
+      pendingTrip = !Array.isArray(data)
+        ? data.pendingTrip || null
+        : null;
+
       render();
-      alert("Yedek başarıyla geri yüklendi.");
+      alert("Yedek geri yüklendi.");
 
     } catch (error) {
-      console.error("Restore error:", error);
-      alert("Yedek dosyası geçersiz veya okunamadı.");
+      alert("Yedek açılamadı: " + error.message);
     }
-  };
-
-  reader.onerror = function () {
-    alert("Dosya okunamadı.");
   };
 
   reader.readAsText(file);
 }
 
-// ---------- CSV EXPORT ----------
+/* ---------- BAŞLAT ---------- */
 
-function exportCSV() {
-  const trips = getTrips();
+document.addEventListener("DOMContentLoaded", () => {
+  loadActiveTrip();
 
-  const headers = [
-    "Tarih",
-    "Tür",
-    "Başlangıç",
-    "Bitiş",
-    "Alış",
-    "Varış",
-    "Km",
-    "Ücret",
-    "Ödeme",
-    "Not"
-  ];
+  document.getElementById("startShift")
+    .addEventListener("click", startShift);
 
-  const rows = trips.map(t => [
-    t.date,
-    t.type,
-    t.start,
-    t.end,
-    t.pickup,
-    t.dropoff,
-    t.km,
-    t.fare,
-    t.payment,
-    t.notes
-  ]);
+  document.getElementById("endShift")
+    .addEventListener("click", endShift);
 
-  const csv = [headers, ...rows]
-    .map(row => row.map(value =>
-      '"' + String(value ?? "").replace(/"/g, '""') + '"'
-    ).join(";"))
-    .join("\r\n");
+  document.getElementById("finishTrip")
+    .addEventListener("click", finishTrip);
 
-  const blob = new Blob(["\uFEFF" + csv], {
-    type: "text/csv;charset=utf-8"
-  });
+  document.getElementById("completeTrip")
+    .addEventListener("click", completeTrip);
 
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
+  document.getElementById("cancelTrip")
+    .addEventListener("click", cancelPendingTrip);
 
-  link.href = url;
-  link.download = "taxi-logbook-" + today() + ".csv";
-  link.style.display = "none";
+  document.getElementById("backup")
+    .addEventListener("click", exportBackup);
 
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
+  document.getElementById("restore")
+    .addEventListener("change", event => {
+      importBackupFile(event.target.files[0]);
+      event.target.value = "";
+    });
 
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-}
-
-// ---------- PRINT / PDF ----------
-
-function printReport() {
-  window.print();
-}
-
-// ---------- TRIP TYPE BUTTONS ----------
-
-function setTripType(kind) {
-  const hidden = document.getElementById("tripKind");
-  const rule = document.getElementById("sendRule");
-
-  if (hidden) hidden.value = kind;
-
-  document.querySelectorAll(".type-btn").forEach(btn => {
-    btn.classList.toggle("selected", btn.dataset.kind === kind);
-  });
-
-  if (rule) {
-    if (kind === "uber") {
-      rule.textContent = "Uber yolculuğu kaydedilir; Chiron'a gönderilmez.";
-    } else if (kind === "bolt") {
-      rule.textContent = "Bolt yolculuğu kaydedilir; Chiron'a gönderilmez.";
-    } else {
-      rule.textContent = "Normal yolculuk Dienststaat'a dahil edilir ve Chiron için hazırlanır.";
-    }
-  }
-}
-
-// ---------- INITIALIZATION ----------
-
-document.addEventListener("DOMContentLoaded", function () {
-
-  // Default trip time
-  const tripStart = document.getElementById("tripStart");
-  if (tripStart && !tripStart.value) {
-    tripStart.value = nowLocal();
-  }
-
-  // Trip type buttons
-  document.querySelectorAll(".type-btn").forEach(btn => {
-    btn.addEventListener("click", function () {
-      setTripType(btn.dataset.kind);
+  document.querySelectorAll(".type-btn").forEach(button => {
+    button.addEventListener("click", () => {
+      requestTripStart(button.dataset.kind);
     });
   });
 
-  // Add trip
-  const form = document.getElementById("tripForm");
+  render();
 
-  if (form) {
-    form.addEventListener("submit", function (event) {
-      event.preventDefault();
+  if (activeTrip) {
+    startGpsTracking();
+  }
+});
 
-      const kind = document.getElementById("tripKind").value;
-      const typeMap = {
-        uber: "Uber",
-        bolt: "Bolt",
-        normal: "Normal"
-      };
-
+window.TaxiLogbook = {
+  getTrips,
+  getShift,
+  exportBackup,
+  importBackupFile,
+  render
+};
       addTrip({
         type: typeMap[kind] || "Uber",
         start: document.getElementById("tripStart").value,
