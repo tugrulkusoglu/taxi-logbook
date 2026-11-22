@@ -1,1 +1,13 @@
-{"name":"Taxi Logbook","short_name":"Taxi Logbook","start_url":"./","display":"standalone","background_color":"#f2f5f8","theme_color":"#102a43","description":"Taxi driver trip and shift logbook"}
+{
+  "name": "TAXI-CHIRON-01 Taxi Logbook",
+  "short_name": "Taxi Logbook",
+  "description": "Taxi ritten, werkuren en rapporten beheren",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#101827",
+  "theme_color": "#101827",
+  "lang": "nl-BE",
+  "icons": []
+}
