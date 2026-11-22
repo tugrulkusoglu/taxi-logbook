@@ -5,227 +5,113 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#102a43">
 <link rel="manifest" href="manifest.webmanifest">
-
-<title>Taxi Logbook</title>
+<title>TAXI-CHIRON-01</title>
 <link rel="stylesheet" href="style.css">
-
 </head>
-
 <body>
 
 <header>
   <div class="brand">🚕 TAXI LOGBOOK</div>
-  <div class="subtitle">Kişisel sürücü kayıt defteri • TAXI-CHIRON-01</div>
+  <div class="subtitle">TAXI-CHIRON-01 · Akıllı Sürüş Kaydı</div>
 </header>
 
 <main>
 
 <!-- VARDİYA -->
-<section class="card shift-card">
-<h2>Vardiya / Dienststaat</h2>
-
-<div class="shift-grid">
-
-<label>Başlangıç km
-<input id="shiftStartKm" type="number" step="0.1" placeholder="Örn. 125430">
-</label>
-
-<label>Vardiya başlangıcı
-<input id="shiftStartTime" type="datetime-local">
-</label>
-
-<label>Bitiş km
-<input id="shiftEndKm" type="number" step="0.1" placeholder="Vardiya bitince">
-</label>
-
-<label>Vardiya bitişi
-<input id="shiftEndTime" type="datetime-local">
-</label>
-
-</div>
-
-<div class="actions">
-<button id="startShift" class="primary">Vardiyayı başlat</button>
-<button id="endShift" class="secondary">Vardiyayı bitir</button>
-<span id="shiftStatus" class="status">Vardiya açık değil</span>
-</div>
-
+<section class="card">
+  <h2>Vardiya</h2>
+  <div class="actions">
+    <button id="startShift" class="primary">▶ Vardiyayı Başlat</button>
+    <button id="endShift" class="secondary">■ Vardiyayı Bitir</button>
+  </div>
+  <div id="shiftStatus" class="status">Vardiya açık değil</div>
 </section>
 
-<!-- YENİ YOLCULUK -->
+<!-- YOLCULUK BAŞLAT -->
 <section class="card">
+  <h2>Yolculuk Başlat</h2>
+  <p>Seçtiğin yolculuk türüne iki kez basarak yolculuğu başlat.</p>
 
-<h2>Yeni yolculuk</h2>
+  <div class="trip-types">
+    <button type="button" class="type-btn" data-kind="uber">🚗 Uber</button>
+    <button type="button" class="type-btn" data-kind="bolt">🟢 Bolt</button>
+    <button type="button" class="type-btn" data-kind="normal">🚕 Normal</button>
+  </div>
 
-<div class="trip-types" role="group" aria-label="Yolculuk türü">
+  <div id="activeTrip" class="active-trip">
+    Aktif yolculuk yok
+  </div>
 
-<button type="button" class="type-btn selected" data-kind="uber">Uber</button>
-
-<button type="button" class="type-btn" data-kind="bolt">Bolt</button>
-
-<button type="button" class="type-btn" data-kind="normal">Normal yolculuk</button>
-
-</div>
-
-<p id="sendRule" class="send-rule">
-Uber yolculuğu kaydedilir; Chiron'a gönderilmez.
-</p>
-
-<form id="tripForm">
-
-<input id="tripKind" type="hidden" value="uber">
-
-<div class="grid">
-
-<label>Başlangıç zamanı
-<input id="tripStart" type="datetime-local" required>
-</label>
-
-<label>Bitiş zamanı
-<input id="tripEnd" type="datetime-local">
-</label>
-
-<label>Alış adresi
-<input id="pickup" placeholder="Adres / locatie">
-</label>
-
-<label>Varış adresi
-<input id="dropoff" placeholder="Adres / bestemming">
-</label>
-
-<label>Km
-<input id="km" type="number" min="0" step="0.1" required>
-</label>
-
-<label>Ücret (€)
-<input id="fare" type="number" min="0" step="0.01" required>
-</label>
-
-<label>Ödeme
-<select id="payment">
-<option>Cash</option>
-<option>Bancontact / kaart</option>
-<option>App</option>
-<option>Andere</option>
-</select>
-</label>
-
-<label>Referans / not
-<input id="note" placeholder="İsteğe bağlı">
-</label>
-
-</div>
-
-<button class="primary" type="submit">Yolculuğu kaydet</button>
-
-</form>
+  <button id="finishTrip" class="danger" disabled>
+    ■ Yolculuğu Bitir
+  </button>
 </section>
 
-<!-- YOLCULUK LİSTESİ -->
-<section class="card">
+<!-- YOLCULUK ÜCRET EKRANI -->
+<section class="card" id="fareCard" hidden>
+  <h2>Yolculuk Dökümü</h2>
 
-<div class="section-head">
+  <div id="tripDetails"></div>
 
-<h2>Yolculuklar</h2>
+  <label>Yolculuk Ücreti (€)
+    <input id="tripFare" type="number" min="0" step="0.01" placeholder="Ücreti gir">
+  </label>
 
-<div class="actions">
+  <button id="completeTrip" class="primary">
+    ✓ Tamam · Yolculuğu Kaydet
+  </button>
 
-<button id="exportCsv" class="secondary">CSV dışa aktar</button>
-
-<button id="printReport" class="secondary">Rapor / PDF yazdır</button>
-
-</div>
-
-</div>
-
-<div class="summary" id="summary"></div>
-
-<div class="table-wrap">
-
-<table>
-
-<thead>
-<tr>
-<th>Tarih</th>
-<th>Tür</th>
-<th>Alış → Varış</th>
-<th>Km</th>
-<th>Ücret</th>
-<th>Ödeme</th>
-<th></th>
-</tr>
-</thead>
-
-<tbody id="tripRows"></tbody>
-
-</table>
-
-</div>
-
+  <button id="cancelTrip" class="secondary">
+    İptal
+  </button>
 </section>
 
-<!-- YEDEKLEME -->
+<!-- YOLCULUK GEÇMİŞİ -->
 <section class="card">
+  <h2>Yolculuk Geçmişi</h2>
 
-<h2>Yedekleme</h2>
+  <div id="summary" class="summary"></div>
 
-<p>
-Verilerini dosyaya yedekle veya daha önce alınmış yedeği geri yükle.
-Uygulama güncellemesi öncesi yedek alman önerilir.
-</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Tarih</th>
+          <th>Tür</th>
+          <th>Alış</th>
+          <th>Varış</th>
+          <th>Km</th>
+          <th>Ücret</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tripRows"></tbody>
+    </table>
+  </div>
+</section>
 
-<div class="actions">
+<!-- YEDEK -->
+<section class="card">
+  <h2>Yedekleme</h2>
 
-<button id="backup" type="button" class="secondary">
-JSON yedeği indir
-</button>
+  <div class="actions">
+    <button id="backup" class="secondary" type="button">
+      JSON Yedeği İndir
+    </button>
 
-<label class="file-label">
-Yedeği geri yükle
-<input id="restore" type="file" accept="application/json">
-</label>
-
-</div>
-
-<small>
-Bilgiler bu cihazın tarayıcısında saklanır.
-Chiron API bağlantısı henüz etkin değildir.
-</small>
-
+    <label class="file-label">
+      Yedeği Geri Yükle
+      <input id="restore" type="file" accept="application/json">
+    </label>
+  </div>
 </section>
 
 </main>
 
 <footer>
-Taxi Logbook • Yerel kayıt • TAXI-CHIRON-01
+  TAXI-CHIRON-01 · GPS Sürüş Kayıt Sistemi
 </footer>
 
-<!-- HATA YAKALAMA -->
-<script>
-window.addEventListener("error", function(e) {
-  alert("JavaScript hatası: " + e.message);
-});
-</script>
-
-<!-- UYGULAMA KODU -->
 <script src="app.js"></script>
-
-<!-- YEDEKLEME BUTONU EK GÜVENLİ BAĞLANTISI -->
-<script>
-document.addEventListener("DOMContentLoaded", function() {
-  const backupButton = document.getElementById("backup");
-
-  if (backupButton) {
-    backupButton.addEventListener("click", function() {
-      if (window.TaxiLogbook && typeof window.TaxiLogbook.exportBackup === "function") {
-        window.TaxiLogbook.exportBackup();
-      } else {
-        alert("Yedekleme kodu yüklenemedi. app.js dosyasını kontrol et.");
-      }
-    });
-  }
-});
-</script>
-
 </body>
 </html>
