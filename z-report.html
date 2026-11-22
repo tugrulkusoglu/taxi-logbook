@@ -1,0 +1,221 @@
+<!DOCTYPE html><html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#102a43">
+<title>TAXI-CHIRON-01 | Z-Report</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:Arial,sans-serif;background:#f1f5f9;color:#102a43;margin:0;padding:16px}
+.container{max-width:950px;margin:auto}
+header,.card{background:white;border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:0 2px 8px #0000000d}
+header{background:#102a43;color:white}
+h1{margin:0 0 6px;font-size:24px}
+h2{font-size:19px;margin-top:0}
+button{border:0;border-radius:8px;padding:12px 16px;font-size:15px;cursor:pointer;margin:4px}
+.primary{background:#087e8b;color:white}
+.secondary{background:#e2e8f0;color:#102a43}
+input{padding:10px;border:1px solid #cbd5e1;border-radius:7px;font-size:15px}
+.filters{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+label{display:flex;flex-direction:column;gap:6px;font-size:14px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:11px 8px;border-bottom:1px solid #e2e8f0;text-align:left;white-space:nowrap}
+th{background:#f1f5f9}
+.badge{display:inline-block;padding:4px 7px;border-radius:5px;font-size:11px;font-weight:bold}
+.uber{background:#e2e8f0;color:#111}
+.bolt{background:#dcfce7;color:#166534}
+.normal{background:#dbeafe;color:#1d4ed8}
+.totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.total{background:#f1f5f9;padding:14px;border-radius:9px}
+.total span{display:block;font-size:13px;color:#475569;margin-bottom:7px}
+.total strong{font-size:21px}
+.grand{background:#102a43;color:white}
+.grand span{color:#dbeafe}
+.empty{text-align:center;padding:25px;color:#64748b}
+@media print{
+ body{background:white;padding:0}
+ .no-print{display:none!important}
+ header,.card{box-shadow:none;border:1px solid #ddd}
+ .container{max-width:none}
+}
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>🚕 TAXI LOGBOOK</h1>
+<div>TAXI-CHIRON-01 · Z-REPORT</div>
+</header><section class="card no-print">
+<h2>Z-Report Oluştur</h2>
+<div class="filters">
+<label>Başlangıç tarihi
+<input type="date" id="dateFrom">
+</label>
+<label>Bitiş tarihi
+<input type="date" id="dateTo">
+</label>
+<button class="primary" id="showReport">Raporu Göster</button>
+<button class="secondary" id="printReport">Yazdır / PDF Kaydet</button>
+<button class="secondary" id="reload">Yenile</button>
+</div>
+</section><section class="card">
+<h2 id="reportTitle">Yolculuk Raporu</h2>
+<div id="reportInfo"></div>
+</section><section class="card">
+<h2>Toplamlar</h2>
+<div class="totals">
+<div class="total"><span>🚕 Normal</span><strong id="normalTotal">0,00 €</strong></div>
+<div class="total"><span>🚗 Uber</span><strong id="uberTotal">0,00 €</strong></div>
+<div class="total"><span>🟢 Bolt</span><strong id="boltTotal">0,00 €</strong></div>
+<div class="total grand"><span>GENEL TOPLAM</span><strong id="grandTotal">0,00 €</strong></div>
+</div>
+</section><section class="card">
+<h2>Yolculuk Listesi</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>#</th><th>Tür</th><th>Tarih</th><th>Başlangıç</th>
+<th>Bitiş</th><th>Alış</th><th>Varış</th><th>Km</th><th>Ücret</th>
+</tr>
+</thead>
+<tbody id="reportRows"></tbody>
+</table>
+</div>
+<div id="emptyMessage" class="empty" hidden>Bu tarih aralığında yolculuk bulunamadı.</div>
+</section>
+</div><script>
+const STORAGE_KEY = "taxi_trips";
+
+function readTrips(){
+  try{
+    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return Array.isArray(data) ? data : [];
+  }catch(error){
+    console.error(error);
+    return [];
+  }
+}
+
+function value(obj, keys){
+  for(const key of keys){
+    if(obj[key] !== undefined && obj[key] !== null && obj[key] !== ""){
+      return obj[key];
+    }
+  }
+  return "";
+}
+
+function dateValue(trip){
+  const raw = value(trip,["startTime","startedAt","start","date","createdAt","timestamp"]);
+  if(!raw) return "";
+  const d = new Date(raw);
+  if(!isNaN(d.getTime())) return d;
+  const text = String(raw);
+  const match = text.match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? new Date(match[0]+"T00:00:00") : null;
+}
+
+function timeValue(trip, keys){
+  const raw = value(trip,keys);
+  if(!raw) return "—";
+  const d = new Date(raw);
+  if(!isNaN(d.getTime())) return d.toLocaleTimeString("tr-TR",{hour:"2-digit",minute:"2-digit"});
+  return String(raw);
+}
+
+function kindValue(trip){
+  const raw = String(value(trip,["kind","type","service","category"])).toLowerCase();
+  if(raw.includes("uber")) return "uber";
+  if(raw.includes("bolt")) return "bolt";
+  return "normal";
+}
+
+function fareValue(trip){
+  const n = Number(value(trip,["fare","price","amount","total","tripFare"]));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function kmValue(trip){
+  const n = Number(value(trip,["distanceKm","distance","km","kilometers"]));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function euro(n){
+  return n.toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
+}
+
+function safe(text){
+  return String(text ?? "").replace(/[&<>"']/g,c=>({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+
+function render(){
+  const from = document.getElementById("dateFrom").value;
+  const to = document.getElementById("dateTo").value;
+
+  const trips = readTrips().map(trip=>{
+    const date = dateValue(trip);
+    return {trip,date,kind:kindValue(trip)};
+  }).filter(item=>{
+    if(!item.date || isNaN(item.date.getTime())) return false;
+    const day = item.date.toISOString().slice(0,10);
+    return (!from || day >= from) && (!to || day <= to);
+  });
+
+  trips.sort((a,b)=>a.date-b.date);
+
+  let totals={normal:0,uber:0,bolt:0};
+  const rows=document.getElementById("reportRows");
+  rows.innerHTML="";
+
+  trips.forEach((item,index)=>{
+    const t=item.trip;
+    const kind=item.kind;
+    const start=timeValue(t,["startTime","startedAt","start"]);
+    const end=timeValue(t,["endTime","endedAt","finishTime","end"]);
+    const pickup=value(t,["pickup","from","startAddress","startLocation"]);
+    const dropoff=value(t,["dropoff","to","endAddress","endLocation"]);
+    const fare=fareValue(t);
+    const km=kmValue(t);
+
+    totals[kind]+=fare;
+
+    const badge=kind==="uber"?"UBER":kind==="bolt"?"BOLT":"NORMAL";
+    const date=item.date.toLocaleDateString("tr-TR");
+
+    rows.insertAdjacentHTML("beforeend",`
+      <tr>
+        <td>${index+1}</td>
+        <td><span class="badge ${kind}">${badge}</span></td>
+        <td>${date}</td>
+        <td>${safe(start)}</td>
+        <td>${safe(end)}</td>
+        <td>${safe(pickup || "—")}</td>
+        <td>${safe(dropoff || "—")}</td>
+        <td>${km.toFixed(2)}</td>
+        <td>${euro(fare)}</td>
+      </tr>
+    `);
+  });
+
+  document.getElementById("normalTotal").textContent=euro(totals.normal);
+  document.getElementById("uberTotal").textContent=euro(totals.uber);
+  document.getElementById("boltTotal").textContent=euro(totals.bolt);
+  document.getElementById("grandTotal").textContent=euro(totals.normal+totals.uber+totals.bolt);
+
+  document.getElementById("emptyMessage").hidden=trips.length!==0;
+  document.getElementById("reportTitle").textContent="Z-Report · "+trips.length+" Yolculuk";
+  document.getElementById("reportInfo").textContent=
+    "Tarih aralığı: "+(from || "İlk kayıt")+" – "+(to || "Son kayıt");
+}
+
+document.getElementById("showReport").addEventListener("click",render);
+document.getElementById("reload").addEventListener("click",render);
+document.getElementById("printReport").addEventListener("click",()=>window.print());
+
+render();
+</script></body>
+  </html>
