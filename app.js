@@ -541,4 +541,360 @@ function completeTrip() {
         pendingTrip.type.slice(1),
 
     start: pendingTrip.startTime,
-    end
+    end: pendingTrip.endTime,
+    date: pendingTrip.startTime.slice(0, 10),
+
+    pickup: "",
+    dropoff: "",
+
+    startPosition: pendingTrip.startPosition,
+    endPosition: pendingTrip.endPosition,
+
+    route: pendingTrip.route,
+
+    km: Number(
+      (pendingTrip.distanceMeters / 1000).toFixed(2)
+    ),
+
+    fare: fare,
+
+    sendToChiron: pendingTrip.type === "normal"
+  };
+
+  const trips = getTrips();
+
+  trips.push(trip);
+
+  saveTrips(trips);
+
+  pendingTrip = null;
+
+  savePendingTrip();
+
+  const card = document.getElementById("fareCard");
+
+  if (card) card.hidden = true;
+
+  render();
+
+  alert("Yolculuk kaydedildi.");
+}
+
+/* ---------- YOLCULUK İPTAL ---------- */
+
+function cancelPendingTrip() {
+  if (!pendingTrip) return;
+
+  if (!confirm("Bu yolculuk kaydı iptal edilsin mi?")) {
+    return;
+  }
+
+  pendingTrip = null;
+
+  savePendingTrip();
+
+  const card = document.getElementById("fareCard");
+
+  if (card) card.hidden = true;
+
+  render();
+}
+
+/* ---------- EKRAN ---------- */
+
+function renderActiveTrip() {
+  const box = document.getElementById("activeTrip");
+  const finish = document.getElementById("finishTrip");
+
+  if (!box || !finish) return;
+
+  if (!activeTrip) {
+    box.textContent = "Aktif yolculuk yok";
+    finish.disabled = true;
+    return;
+  }
+
+  const km = activeTrip.distanceMeters / 1000;
+
+  box.innerHTML = `
+    <strong>
+      ${escapeHTML(activeTrip.type.toUpperCase())}
+      yolculuğu devam ediyor
+    </strong>
+    <br>
+    Başlangıç: ${formatDate(activeTrip.startTime)}
+    <br>
+    GPS mesafesi: ${km.toFixed(2)} km
+    <br>
+    GPS takibi aktif
+  `;
+
+  finish.disabled = false;
+}
+
+function renderShift() {
+  const box = document.getElementById("shiftStatus");
+
+  if (!box) return;
+
+  const shift = getShift();
+
+  if (!shift) {
+    box.textContent = "Vardiya açık değil";
+
+  } else if (shift.active) {
+    box.textContent =
+      "Vardiya açık · Başlangıç: " +
+      formatDate(shift.startTime);
+
+  } else {
+    box.textContent =
+      "Vardiya kapalı · Başlangıç: " +
+      formatDate(shift.startTime) +
+      " · Bitiş: " +
+      formatDate(shift.endTime);
+  }
+}
+
+function renderTrips() {
+  const tbody = document.getElementById("tripRows");
+
+  if (!tbody) return;
+
+  tbody.innerHTML = getTrips().slice().reverse().map(trip => `
+    <tr>
+      <td>${escapeHTML(trip.date || "")}</td>
+      <td>${escapeHTML(trip.type || "")}</td>
+      <td>${escapeHTML(trip.pickup || "GPS")}</td>
+      <td>${escapeHTML(trip.dropoff || "GPS")}</td>
+      <td>${Number(trip.km || 0).toFixed(2)}</td>
+      <td>${money(trip.fare)}</td>
+      <td>
+        <button type="button" data-delete="${trip.id}">
+          Sil
+        </button>
+      </td>
+    </tr>
+  `).join("");
+
+  tbody.querySelectorAll("[data-delete]").forEach(button => {
+    button.addEventListener("click", () => {
+      const id = Number(button.dataset.delete);
+
+      if (!confirm("Bu yolculuk silinsin mi?")) return;
+
+      saveTrips(
+        getTrips().filter(t => t.id !== id)
+      );
+
+      render();
+    });
+  });
+}
+
+function renderSummary() {
+  const box = document.getElementById("summary");
+
+  if (!box) return;
+
+  const trips = getTrips();
+
+  const km = trips.reduce(
+    (sum, t) => sum + Number(t.km || 0),
+    0
+  );
+
+  const fare = trips.reduce(
+    (sum, t) => sum + Number(t.fare || 0),
+    0
+  );
+
+  box.innerHTML = `
+    <div class="summary-item">
+      <strong>${trips.length}</strong>
+      <span>Yolculuk</span>
+    </div>
+
+    <div class="summary-item">
+      <strong>${km.toFixed(2)} km</strong>
+      <span>Toplam km</span>
+    </div>
+
+    <div class="summary-item">
+      <strong>${money(fare)}</strong>
+      <span>Toplam ücret</span>
+    </div>
+  `;
+}
+
+function render() {
+  renderShift();
+  renderActiveTrip();
+  renderTrips();
+  renderSummary();
+}
+
+/* ---------- YEDEKLEME ---------- */
+
+function exportBackup() {
+  const data = {
+    app: "TAXI-CHIRON-01",
+    version: "3.1.0",
+    exportDate: nowISO(),
+    trips: getTrips(),
+    shift: getShift(),
+    activeTrip: activeTrip,
+    pendingTrip: pendingTrip
+  };
+
+  const blob = new Blob(
+    [JSON.stringify(data, null, 2)],
+    { type: "application/json" }
+  );
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = "taxi-logbook-backup.json";
+
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function importBackupFile(file) {
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+
+      const trips = Array.isArray(data)
+        ? data
+        : data.trips;
+
+      if (!Array.isArray(trips)) {
+        throw new Error("Geçersiz yedek dosyası.");
+      }
+
+      if (!confirm(
+        "Mevcut yolculukların yerine yedek dosyası yüklensin mi?"
+      )) {
+        return;
+      }
+
+      saveTrips(trips);
+
+      if (Array.isArray(data)) {
+        activeTrip = null;
+        pendingTrip = null;
+      } else {
+        if (data.shift) saveShift(data.shift);
+
+        activeTrip = data.activeTrip || null;
+        pendingTrip = data.pendingTrip || null;
+      }
+
+      saveActiveTrip();
+      savePendingTrip();
+
+      stopGpsTracking();
+
+      render();
+
+      if (activeTrip) startGpsTracking();
+      if (pendingTrip) showFareScreen();
+
+      alert("Yedek geri yüklendi.");
+
+    } catch (error) {
+      alert("Yedek açılamadı: " + error.message);
+    }
+  };
+
+  reader.readAsText(file);
+}
+
+/* ---------- BAŞLAT ---------- */
+
+function initializeApp() {
+  loadData();
+
+  const startButton = document.getElementById("startShift");
+  const endButton = document.getElementById("endShift");
+  const finishButton = document.getElementById("finishTrip");
+  const completeButton = document.getElementById("completeTrip");
+  const cancelButton = document.getElementById("cancelTrip");
+  const backupButton = document.getElementById("backup");
+  const restoreInput = document.getElementById("restore");
+
+  if (startButton) {
+    startButton.addEventListener("click", startShift);
+  }
+
+  if (endButton) {
+    endButton.addEventListener("click", endShift);
+  }
+
+  if (finishButton) {
+    finishButton.addEventListener("click", finishTrip);
+  }
+
+  if (completeButton) {
+    completeButton.addEventListener("click", completeTrip);
+  }
+
+  if (cancelButton) {
+    cancelButton.addEventListener("click", cancelPendingTrip);
+  }
+
+  if (backupButton) {
+    backupButton.addEventListener("click", exportBackup);
+  }
+
+  if (restoreInput) {
+    restoreInput.addEventListener("change", event => {
+      importBackupFile(event.target.files[0]);
+      event.target.value = "";
+    });
+  }
+
+  document.querySelectorAll(".type-btn").forEach(button => {
+    button.addEventListener("click", () => {
+      requestTripStart(button.dataset.kind);
+    });
+  });
+
+  render();
+
+  if (activeTrip) {
+    startGpsTracking();
+  }
+
+  if (pendingTrip) {
+    showFareScreen();
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeApp);
+} else {
+  initializeApp();
+}
+
+/* ---------- DIŞ ERİŞİM ---------- */
+
+window.TaxiLogbook = {
+  getTrips,
+  getShift,
+  exportBackup,
+  importBackupFile,
+  render,
+  startShift,
+  endShift
+};
