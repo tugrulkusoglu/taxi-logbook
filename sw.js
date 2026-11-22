@@ -1,4 +1,4 @@
-const CACHE_NAME = "taxi-logbook-v2";
+const CACHE_NAME = "taxi-logbook-v3";
 
 const FILES = [
   "./",
@@ -12,6 +12,7 @@ self.addEventListener("install", event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => cache.addAll(FILES))
   );
+
   self.skipWaiting();
 });
 
@@ -25,6 +26,7 @@ self.addEventListener("activate", event => {
       )
     )
   );
+
   self.clients.claim();
 });
 
@@ -34,8 +36,11 @@ self.addEventListener("fetch", event => {
   event.respondWith(
     fetch(event.request)
       .then(response => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+        if (response && response.ok && new URL(event.request.url).origin === self.location.origin) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+        }
+
         return response;
       })
       .catch(() => caches.match(event.request))
