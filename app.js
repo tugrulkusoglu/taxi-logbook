@@ -1,7 +1,6 @@
 /* ==========================================
    TAXI LOGBOOK — TAXI-CHIRON-01
-   Version 4.1.0
-   GPS + PAUZE + SHIFT HISTORY
+   Version 4.0.0
    ========================================== */
 
 "use strict";
@@ -12,8 +11,6 @@ const STORAGE_KEY = "taxi_trips";
 const SHIFT_KEY = "taxi_shift";
 const ACTIVE_TRIP_KEY = "taxi_active_trip";
 const PENDING_TRIP_KEY = "taxi_pending_trip";
-const SHIFT_HISTORY_KEY = "taxi_shifts_history";
-
 const DOUBLE_CLICK_MS = 1500;
 
 let activeTrip = null;
@@ -33,17 +30,45 @@ function formatDate(value) {
   return new Date(value).toLocaleString("tr-BE");
 }
 
-function money(value) {
+function formatTime(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleTimeString("tr-BE", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function formatMoney(value) {
   return Number(value || 0).toFixed(2) + " €";
 }
 
-function getTrips() {
+function formatDistance(meters) {
+  return (Number(meters || 0) / 1000).toFixed(2) + " km";
+}
+
+function localDateKey(value) {
+  if (!value) return "";
+  const d = new Date(value);
+
+  return (
+    d.getFullYear() +
+    "-" +
+    String(d.getMonth() + 1).padStart(2, "0") +
+    "-" +
+    String(d.getDate()).padStart(2, "0")
+  );
+}
+
+function safeJSON(value, fallback) {
   try {
-    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    return Array.isArray(data) ? data : [];
+    return JSON.parse(value) ?? fallback;
   } catch {
-    return [];
+    return fallback;
   }
+}
+
+function getTrips() {
+  return safeJSON(localStorage.getItem(STORAGE_KEY), []);
 }
 
 function saveTrips(trips) {
@@ -51,347 +76,257 @@ function saveTrips(trips) {
 }
 
 function getShift() {
-  try {
-    return JSON.parse(localStorage.getItem(SHIFT_KEY) || "null");
-  } catch {
-    return null;
-  }
+  return safeJSON(localStorage.getItem(SHIFT_KEY), null);
 }
 
 function saveShift(shift) {
   localStorage.setItem(SHIFT_KEY, JSON.stringify(shift));
 }
 
-function getShiftHistory() {
-  try {
-    const data = JSON.parse(
-      localStorage.getItem(SHIFT_HISTORY_KEY) || "[]"
-    );
-
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveShiftHistory(history) {
-  localStorage.setItem(SHIFT_HISTORY_KEY, JSON.stringify(history));
-}
-
-function loadData() {
-  try {
-    activeTrip = JSON.parse(
-      localStorage.getItem(ACTIVE_TRIP_KEY) || "null"
-    );
-  } catch {
-    activeTrip = null;
-  }
-
-  try {
-    pendingTrip = JSON.parse(
-      localStorage.getItem(PENDING_TRIP_KEY) || "null"
-    );
-  } catch {
-    pendingTrip = null;
-  }
-}
-
-function saveActiveTrip() {
-  if (activeTrip) {
-    localStorage.setItem(
-      ACTIVE_TRIP_KEY,
-      JSON.stringify(activeTrip)
-    );
-  } else {
-    localStorage.removeItem(ACTIVE_TRIP_KEY);
-  }
-}
-
-function savePendingTrip() {
-  if (pendingTrip) {
-    localStorage.setItem(
-      PENDING_TRIP_KEY,
-      JSON.stringify(pendingTrip)
-    );
-  } else {
-    localStorage.removeItem(PENDING_TRIP_KEY);
-  }
-}
-
-function escapeHTML(value) {
-  return String(value ?? "").replace(/[&<>"']/g, c => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;"
-  }[c]));
-}
-
-/* ---------- GPS ---------- */
-
 function getPosition() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      reject(new Error("Tarayıcı GPS desteği bulunamadı."));
+      reject(new Error("GPS desteklenmiyor."));
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
-      position => resolve({
-        lat: position.coords.latitude,
-        lon: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-        time: position.timestamp
-      }),
-      error => reject(
-        new Error("GPS konumu alınamadı: " + error.message)
-      ),
+      position => {
+        resolve({
+          lat: position.coords.latitude,
+          lon: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          timestamp: position.timestamp
+        });
+      },
+      error => reject(error),
       {
         enableHighAccuracy: true,
         timeout: 15000,
-        maximumAge: 10000
+        maximumAge: 0
       }
     );
   });
 }
 
-function distanceBetween(a, b) {
-  const R = 6371000;
-  const rad = v => v * Math.PI / 180;
-
-  const dLat = rad(b.lat - a.lat);
-  const dLon = rad(b.lon - a.lon);
-
-  const lat1 = rad(a.lat);
-  const lat2 = rad(b.lat);
-
-  const x =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) *
-    Math.cos(lat2) *
-    Math.sin(dLon / 2) ** 2;
-
-  return 2 * R * Math.atan2(
-    Math.sqrt(x),
-    Math.sqrt(1 - x)
-  );
-}
-
-function addGpsPoint(position) {
-  if (!activeTrip) return;
-
-  const point = {
-    lat: position.coords.latitude,
-    lon: position.coords.longitude,
-    accuracy: position.coords.accuracy,
-    time: position.timestamp
-  };
-
-  if (point.accuracy > 50) return;
-
-  const previous = activeTrip.lastPoint;
-
-  if (previous) {
-    const meters = distanceBetween(previous, point);
-    const seconds = (point.time - previous.time) / 1000;
-
-    if (meters < 5) return;
-    if (seconds > 0 && meters / seconds > 60) return;
-
-    activeTrip.distanceMeters =
-      (activeTrip.distanceMeters || 0) + meters;
-  }
-
-  activeTrip.route = activeTrip.route || [];
-  activeTrip.route.push(point);
-  activeTrip.lastPoint = point;
-
-  saveActiveTrip();
-  renderActiveTrip();
-}
+/* ---------- GPS ---------- */
 
 function startGpsTracking() {
-  if (!navigator.geolocation || gpsWatcher !== null) return;
+  if (!activeTrip || !navigator.geolocation) return;
+
+  if (gpsWatcher !== null) {
+    navigator.geolocation.clearWatch(gpsWatcher);
+  }
 
   gpsWatcher = navigator.geolocation.watchPosition(
-    addGpsPoint,
-    error => console.warn("GPS:", error.message),
+    position => {
+      if (!activeTrip) return;
+
+      const point = {
+        lat: position.coords.latitude,
+        lon: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        timestamp: position.timestamp
+      };
+
+      if (!activeTrip.route) {
+        activeTrip.route = [];
+      }
+
+      if (!activeTrip.lastPoint) {
+        activeTrip.lastPoint = point;
+        activeTrip.route.push(point);
+        saveActiveTrip();
+        return;
+      }
+
+      const distance = calculateDistance(
+        activeTrip.lastPoint,
+        point
+      );
+
+      if (distance > 3) {
+        activeTrip.distanceMeters =
+          (activeTrip.distanceMeters || 0) + distance;
+
+        activeTrip.lastPoint = point;
+        activeTrip.route.push(point);
+
+        saveActiveTrip();
+        render();
+      }
+    },
+    error => {
+      console.warn("GPS hatası:", error.message);
+    },
     {
       enableHighAccuracy: true,
       maximumAge: 3000,
-      timeout: 20000
+      timeout: 15000
     }
   );
 }
 
 function stopGpsTracking() {
-  if (gpsWatcher !== null && navigator.geolocation) {
+  if (gpsWatcher !== null) {
     navigator.geolocation.clearWatch(gpsWatcher);
+    gpsWatcher = null;
+  }
+}
+
+function calculateDistance(a, b) {
+  if (!a || !b) return 0;
+
+  const R = 6371000;
+
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
+
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLon = (b.lon - a.lon) * Math.PI / 180;
+
+  const x =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) *
+    Math.cos(lat2) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+
+  return R * c;
+}
+
+/* ---------- ACTIVE TRIP ---------- */
+
+function saveActiveTrip() {
+  if (!activeTrip) {
+    localStorage.removeItem(ACTIVE_TRIP_KEY);
+    return;
   }
 
-  gpsWatcher = null;
+  localStorage.setItem(
+    ACTIVE_TRIP_KEY,
+    JSON.stringify(activeTrip)
+  );
+}
+
+function loadActiveTrip() {
+  activeTrip = safeJSON(
+    localStorage.getItem(ACTIVE_TRIP_KEY),
+    null
+  );
+}
+
+/* ---------- PENDING TRIP ---------- */
+
+function savePendingTrip() {
+  if (!pendingTrip) {
+    localStorage.removeItem(PENDING_TRIP_KEY);
+    return;
+  }
+
+  localStorage.setItem(
+    PENDING_TRIP_KEY,
+    JSON.stringify(pendingTrip)
+  );
+}
+
+function loadPendingTrip() {
+  pendingTrip = safeJSON(
+    localStorage.getItem(PENDING_TRIP_KEY),
+    null
+  );
 }
 
 /* ---------- SHIFT ---------- */
 
-async function startShift() {
-  if (getShift()?.active) {
-    alert("Vardiya zaten açık.");
+function startShift() {
+  if (getShift()) {
+    alert("Dienst is al gestart.");
     return;
   }
 
-  const button = document.getElementById("startShift");
-  if (button) button.disabled = true;
-
   const shift = {
     id: Date.now(),
-    active: true,
     startTime: nowISO(),
-    startPosition: null,
     endTime: null,
-    endPosition: null,
     pauses: [],
-    pauseActive: false
+    currentPause: null
   };
 
   saveShift(shift);
   render();
-
-  if (button) button.disabled = false;
-
-  alert("Vardiya başladı.");
-
-  getPosition()
-    .then(position => {
-      const current = getShift();
-
-      if (current?.active) {
-        current.startPosition = position;
-        saveShift(current);
-        render();
-      }
-    })
-    .catch(error => console.warn("Vardiya GPS:", error.message));
 }
 
-/* ---------- PAUSE / PAUZE ---------- */
-
-function togglePause() {
+function endShift() {
   const shift = getShift();
 
-  if (!shift?.active) {
-    alert("Önce vardiyayı başlat.");
+  if (!shift) {
+    alert("Er is geen actieve dienst.");
     return;
   }
 
-  if (activeTrip) {
-    alert("Pauze başlatmadan önce aktif yolculuğu bitir.");
+  if (activeTrip || pendingTrip) {
+    alert("Beëindig eerst de rit.");
     return;
   }
 
-  shift.pauses = Array.isArray(shift.pauses)
-    ? shift.pauses
-    : [];
-
-  const time = nowISO();
-
-  if (shift.pauseActive) {
-    // PAUZE BİTİR
-    const openPause = shift.pauses.find(p => !p.endTime);
-
-    if (openPause) {
-      openPause.endTime = time;
-    }
-
-    shift.pauseActive = false;
-
-    saveShift(shift);
-    render();
-
-    alert("Pauze bitti. Vardiya devam ediyor.");
-  } else {
-    // PAUZE BAŞLAT
-    shift.pauses.push({
-      startTime: time,
-      endTime: null
-    });
-
-    shift.pauseActive = true;
-
-    saveShift(shift);
-    render();
-
-    alert("Pauze başladı.");
-  }
-}
-
-/* ---------- END SHIFT ---------- */
-
-async function endShift() {
-  const shift = getShift();
-
-  if (!shift?.active) {
-    alert("Aktif vardiya bulunamadı.");
+  if (shift.currentPause) {
+    alert("Beëindig eerst de pauze.");
     return;
   }
 
-  if (activeTrip) {
-    alert("Önce aktif yolculuğu bitir.");
-    return;
-  }
+  shift.endTime = nowISO();
 
-  if (!confirm("Vardiyayı bitirmek istiyor musun?")) {
-    return;
-  }
-
-  const endTime = nowISO();
-
-  // Açık pauze varsa otomatik kapat
-  if (shift.pauseActive) {
-    const openPause = (shift.pauses || []).find(p => !p.endTime);
-
-    if (openPause) {
-      openPause.endTime = endTime;
-    }
-
-    shift.pauseActive = false;
-  }
-
-  shift.active = false;
-  shift.endTime = endTime;
-
-  try {
-    shift.endPosition = await getPosition();
-  } catch (error) {
-    console.warn("Vardiya bitiş GPS:", error.message);
-  }
-
-  // Vardiya arşivi
-  const history = getShiftHistory();
-
-  // Aynı vardiyanın iki kez kaydedilmesini önle
-  const shiftId = shift.id || shift.startTime;
-
-  const exists = history.some(s =>
-    String(s.id || s.startTime) === String(shiftId)
-  );
-
-  if (!exists) {
-    history.push({
-      ...shift,
-      id: shiftId
-    });
-
-    saveShiftHistory(history);
-  }
-
-  // Son vardiyayı eski sistemle uyumluluk için sakla
   saveShift(shift);
-
   render();
+}
 
-  alert("Vardiya bitti ve arşive kaydedildi.");
+function startPause() {
+  const shift = getShift();
+
+  if (!shift) {
+    alert("Start eerst de dienst.");
+    return;
+  }
+
+  if (shift.currentPause) {
+    alert("Pauze is al gestart.");
+    return;
+  }
+
+  if (activeTrip || pendingTrip) {
+    alert("Beëindig eerst de rit.");
+    return;
+  }
+
+  shift.currentPause = {
+    startTime: nowISO(),
+    endTime: null
+  };
+
+  saveShift(shift);
+  render();
+}
+
+function endPause() {
+  const shift = getShift();
+
+  if (!shift || !shift.currentPause) {
+    alert("Er is geen actieve pauze.");
+    return;
+  }
+
+  shift.currentPause.endTime = nowISO();
+
+  shift.pauses = shift.pauses || [];
+  shift.pauses.push(shift.currentPause);
+
+  shift.currentPause = null;
+
+  saveShift(shift);
+  render();
 }
 
 /* ---------- TRIP START ---------- */
@@ -399,20 +334,32 @@ async function endShift() {
 function startTrip(kind) {
   const shift = getShift();
 
-  if (!shift?.active) {
-    alert("Önce vardiyayı başlat.");
+  if (!shift) {
+    alert("Start eerst de dienst.");
     return;
   }
 
-  if (shift.pauseActive) {
-    alert("Pauze sırasında yolculuk başlatamazsın. Önce pauzeyi bitir.");
+  if (shift.currentPause) {
+    alert("Beëindig eerst de pauze.");
     return;
   }
 
-  if (activeTrip) {
-    alert("Önce mevcut yolculuğu bitir.");
+  if (activeTrip || pendingTrip) {
+    alert("Er is al een rit bezig.");
     return;
   }
+
+  const currentTime = Date.now();
+
+  if (
+    lastClickKind === kind &&
+    currentTime - lastClickTime < DOUBLE_CLICK_MS
+  ) {
+    return;
+  }
+
+  lastClickKind = kind;
+  lastClickTime = currentTime;
 
   activeTrip = {
     id: Date.now(),
@@ -430,72 +377,38 @@ function startTrip(kind) {
   };
 
   saveActiveTrip();
-  renderActiveTrip();
 
   getPosition()
     .then(position => {
       if (!activeTrip) return;
 
       activeTrip.startPosition = position;
-      activeTrip.pickup = "GPS";
 
-      activeTrip.route.push({
-        lat: position.lat,
-        lon: position.lon,
-        accuracy: position.accuracy,
-        time: position.time
-      });
+      activeTrip.pickup =
+        position.lat.toFixed(5) +
+        ", " +
+        position.lon.toFixed(5);
 
-      activeTrip.lastPoint = {
-        lat: position.lat,
-        lon: position.lon,
-        accuracy: position.accuracy,
-        time: position.time
-      };
+      activeTrip.lastPoint = position;
+
+      activeTrip.route = [position];
 
       saveActiveTrip();
-      renderActiveTrip();
+      render();
     })
-    .catch(error => console.warn("Başlangıç GPS:", error.message));
+    .catch(error => {
+      console.warn("Başlangıç GPS:", error.message);
+    });
 
   startGpsTracking();
   render();
-
-  alert(kind.toUpperCase() + " yolculuğu başladı.");
-}
-
-function handleTypeClick(kind) {
-  const time = Date.now();
-
-  if (
-    lastClickKind === kind &&
-    time - lastClickTime <= DOUBLE_CLICK_MS
-  ) {
-    lastClickKind = null;
-    lastClickTime = 0;
-
-    startTrip(kind);
-    return;
-  }
-
-  lastClickKind = kind;
-  lastClickTime = time;
-
-  setTimeout(() => {
-    if (
-      lastClickKind === kind &&
-      Date.now() - lastClickTime >= DOUBLE_CLICK_MS
-    ) {
-      lastClickKind = null;
-    }
-  }, DOUBLE_CLICK_MS + 50);
 }
 
 /* ---------- TRIP FINISH ---------- */
 
 async function finishTrip() {
   if (!activeTrip) {
-    alert("Aktif yolculuk yok.");
+    alert("Er is geen actieve rit.");
     return;
   }
 
@@ -509,11 +422,424 @@ async function finishTrip() {
     const p = activeTrip.endPosition;
 
     activeTrip.dropoff =
-      p.lat.toFixed(5) + ", " + p.lon.toFixed(5);
+      p.lat.toFixed(5) +
+      ", " +
+      p.lon.toFixed(5);
   } catch (error) {
     console.warn("Bitiş GPS:", error.message);
   }
 
   activeTrip.lastPoint = null;
 
-  pendingTrip = { ...
+  pendingTrip = {
+    ...activeTrip
+  };
+
+  activeTrip = null;
+
+  saveActiveTrip();
+  savePendingTrip();
+
+  renderFareCard();
+  render();
+}
+
+/* ---------- FARE ---------- */
+
+function renderFareCard() {
+  const card = document.getElementById("fareCard");
+  if (!card || !pendingTrip) return;
+
+  card.classList.remove("hidden");
+
+  const distance = document.getElementById("fareDistance");
+  const duration = document.getElementById("fareDuration");
+
+  if (distance) {
+    distance.textContent = formatDistance(
+      pendingTrip.distanceMeters
+    );
+  }
+
+  if (duration) {
+    const start = new Date(pendingTrip.startTime);
+    const end = new Date(pendingTrip.endTime);
+
+    const minutes = Math.max(
+      0,
+      Math.round((end - start) / 60000)
+    );
+
+    duration.textContent = minutes + " min";
+  }
+
+  const fareInput = document.getElementById("fareInput");
+
+  if (fareInput) {
+    fareInput.value = pendingTrip.fare || "";
+  }
+}
+
+function completeTrip() {
+  if (!pendingTrip) {
+    alert("Er is geen rit om af te sluiten.");
+    return;
+  }
+
+  const fareInput = document.getElementById("fareInput");
+
+  const fare = Number(
+    fareInput ? fareInput.value : 0
+  );
+
+  if (!Number.isFinite(fare) || fare < 0) {
+    alert("Voer een geldig bedrag in.");
+    return;
+  }
+
+  pendingTrip.fare = fare;
+
+  const trips = getTrips();
+
+  trips.push(pendingTrip);
+
+  saveTrips(trips);
+
+  pendingTrip = null;
+
+  savePendingTrip();
+
+  const card = document.getElementById("fareCard");
+
+  if (card) {
+    card.classList.add("hidden");
+  }
+
+  render();
+}
+
+/* ---------- CANCEL TRIP ---------- */
+
+function cancelTrip() {
+  if (!activeTrip && !pendingTrip) {
+    alert("Er is geen rit om te annuleren.");
+    return;
+  }
+
+  if (!confirm("Rit annuleren?")) {
+    return;
+  }
+
+  stopGpsTracking();
+
+  activeTrip = null;
+  pendingTrip = null;
+
+  saveActiveTrip();
+  savePendingTrip();
+
+  const card = document.getElementById("fareCard");
+
+  if (card) {
+    card.classList.add("hidden");
+  }
+
+  render();
+}
+
+/* ---------- DISPLAY ---------- */
+
+function renderShift() {
+  const shift = getShift();
+
+  const shiftStatus = document.getElementById("shiftStatus");
+  const shiftStart = document.getElementById("shiftStart");
+  const shiftEnd = document.getElementById("shiftEnd");
+
+  if (shiftStatus) {
+    shiftStatus.textContent = shift
+      ? "Dienst actief"
+      : "Dienst niet gestart";
+  }
+
+  if (shiftStart) {
+    shiftStart.textContent = shift
+      ? formatTime(shift.startTime)
+      : "—";
+  }
+
+  if (shiftEnd) {
+    shiftEnd.textContent = shift
+      ? formatTime(shift.endTime)
+      : "—";
+  }
+
+  const startShiftButton =
+    document.getElementById("startShift");
+
+  const endShiftButton =
+    document.getElementById("endShift");
+
+  const startPauseButton =
+    document.getElementById("startPause");
+
+  const endPauseButton =
+    document.getElementById("endPause");
+
+  if (startShiftButton) {
+    startShiftButton.disabled = !!shift;
+  }
+
+  if (endShiftButton) {
+    endShiftButton.disabled = !shift;
+  }
+
+  if (startPauseButton) {
+    startPauseButton.disabled =
+      !shift || !!shift.currentPause;
+  }
+
+  if (endPauseButton) {
+    endPauseButton.disabled =
+      !shift || !shift.currentPause;
+  }
+
+  const pauseStatus =
+    document.getElementById("pauseStatus");
+
+  if (pauseStatus) {
+    pauseStatus.textContent =
+      shift && shift.currentPause
+        ? "Pauze actief"
+        : "Geen pauze";
+  }
+}
+
+function renderTripStatus() {
+  const status = document.getElementById("tripStatus");
+
+  if (!status) return;
+
+  if (activeTrip) {
+    status.textContent =
+      activeTrip.kind === "street"
+        ? "Straatrit actief"
+        : "Bestelde rit actief";
+
+    return;
+  }
+
+  if (pendingTrip) {
+    status.textContent = "Rit wacht op prijs";
+    return;
+  }
+
+  status.textContent = "Geen actieve rit";
+}
+
+function renderTrips() {
+  const container = document.getElementById("tripRows");
+
+  if (!container) return;
+
+  const trips = getTrips();
+
+  if (!trips.length) {
+    container.innerHTML = `
+      <tr>
+        <td colspan="6">Nog geen ritten.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  container.innerHTML = trips
+    .slice()
+    .reverse()
+    .map(trip => {
+      return `
+        <tr>
+          <td>${formatDate(trip.startTime)}</td>
+          <td>${trip.kind === "street" ? "Straat" : "Besteld"}</td>
+          <td>${formatTime(trip.startTime)}</td>
+          <td>${formatTime(trip.endTime)}</td>
+          <td>${formatDistance(trip.distanceMeters)}</td>
+          <td>${formatMoney(trip.fare)}</td>
+          <td>
+            <button
+              class="delete-trip"
+              data-id="${trip.id}"
+              type="button"
+            >
+              ×
+            </button>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+function render() {
+  renderShift();
+  renderTripStatus();
+  renderTrips();
+
+  if (pendingTrip) {
+    renderFareCard();
+  }
+}
+
+/* ---------- DELETE ---------- */
+
+function deleteTrip(id) {
+  if (!confirm("Rit verwijderen?")) return;
+
+  const trips = getTrips().filter(
+    trip => String(trip.id) !== String(id)
+  );
+
+  saveTrips(trips);
+  render();
+}
+
+/* ---------- BACKUP ---------- */
+
+function backupData() {
+  const data = {
+    trips: getTrips(),
+    shift: getShift(),
+    activeTrip,
+    pendingTrip,
+    exportDate: nowISO()
+  };
+
+  const blob = new Blob(
+    [JSON.stringify(data, null, 2)],
+    { type: "application/json" }
+  );
+
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = "taxi-logbook-backup.json";
+  link.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function restoreData(event) {
+  const file = event.target.files?.[0];
+
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+
+      if (!confirm("Backup terugzetten?")) return;
+
+      if (Array.isArray(data.trips)) {
+        saveTrips(data.trips);
+      }
+
+      if (data.shift) {
+        saveShift(data.shift);
+      }
+
+      activeTrip = data.activeTrip || null;
+      pendingTrip = data.pendingTrip || null;
+
+      saveActiveTrip();
+      savePendingTrip();
+
+      render();
+
+      alert("Backup succesvol teruggezet.");
+    } catch (error) {
+      alert("Ongeldig backupbestand.");
+    }
+  };
+
+  reader.readAsText(file);
+}
+
+/* ---------- LOAD ---------- */
+
+function loadData() {
+  activeTrip = safeJSON(
+    localStorage.getItem(ACTIVE_TRIP_KEY),
+    null
+  );
+
+  pendingTrip = safeJSON(
+    localStorage.getItem(PENDING_TRIP_KEY),
+    null
+  );
+}
+
+/* ---------- EVENTS ---------- */
+
+function bindEvents() {
+  document.getElementById("startShift")
+    ?.addEventListener("click", startShift);
+
+  document.getElementById("endShift")
+    ?.addEventListener("click", endShift);
+
+  document.getElementById("startPause")
+    ?.addEventListener("click", startPause);
+
+  document.getElementById("endPause")
+    ?.addEventListener("click", endPause);
+
+  document.getElementById("streetTrip")
+    ?.addEventListener("click", () => startTrip("street"));
+
+  document.getElementById("orderedTrip")
+    ?.addEventListener("click", () => startTrip("ordered"));
+
+  document.getElementById("finishTrip")
+    ?.addEventListener("click", finishTrip);
+
+  document.getElementById("completeTrip")
+    ?.addEventListener("click", completeTrip);
+
+  document.getElementById("cancelTrip")
+    ?.addEventListener("click", cancelTrip);
+
+  document.getElementById("backup")
+    ?.addEventListener("click", backupData);
+
+  document.getElementById("restore")
+    ?.addEventListener("change", restoreData);
+
+  document.getElementById("tripRows")
+    ?.addEventListener("click", event => {
+      const button = event.target.closest(".delete-trip");
+
+      if (button) {
+        deleteTrip(button.dataset.id);
+      }
+    });
+}
+
+/* ---------- INIT ---------- */
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadData();
+  bindEvents();
+  render();
+
+  if (activeTrip) {
+    startGpsTracking();
+  }
+
+  if (pendingTrip) {
+    renderFareCard();
+  }
+});
