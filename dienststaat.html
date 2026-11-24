@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111827">
 <title>Dienststaat - Taxi Logbook</title>
 
 <style>
@@ -11,115 +12,164 @@
 }
 
 body {
-  font-family: Arial, sans-serif;
-  background: #f3f4f6;
-  color: #222;
   margin: 0;
-  padding: 15px;
+  padding: 16px;
+  background: #f3f4f6;
+  color: #111827;
+  font-family: Arial, sans-serif;
 }
 
 .container {
-  max-width: 900px;
+  max-width: 850px;
   margin: auto;
 }
 
 .card {
   background: white;
-  padding: 18px;
-  margin-bottom: 15px;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+  padding: 20px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.06);
 }
 
-h1, h2 {
-  margin-top: 0;
+h1 {
+  margin: 0 0 16px;
+  font-size: 24px;
 }
 
-.date-controls {
+h2 {
+  font-size: 18px;
+  margin: 0 0 14px;
+}
+
+.navigation {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
 }
 
-button, input, select {
-  padding: 10px;
-  font-size: 16px;
-}
-
 button {
   border: none;
-  border-radius: 7px;
-  cursor: pointer;
-  background: #222;
+  border-radius: 8px;
+  padding: 12px 16px;
+  background: #111827;
   color: white;
+  font-size: 15px;
+  cursor: pointer;
 }
 
-button:active {
-  opacity: .8;
+button.secondary {
+  background: #e5e7eb;
+  color: #111827;
 }
 
 input, select {
-  border: 1px solid #ccc;
-  border-radius: 6px;
+  padding: 11px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 16px;
 }
 
-.date-controls input {
+#datePicker {
   flex: 1;
   min-width: 150px;
 }
 
-.info-grid {
+#shiftSelector {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.stats {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.stat {
+  padding: 15px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.stat .label {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.stat .value {
+  font-size: 23px;
+  font-weight: bold;
+  margin-top: 6px;
+}
+
+.trip {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+
+.trip-header {
+  display: flex;
+  justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
-.info-box {
-  background: #f8f8f8;
-  padding: 12px;
-  border-radius: 8px;
-}
-
-.label {
-  font-size: 12px;
-  color: #666;
-  margin-bottom: 5px;
-}
-
-.value {
-  font-size: 18px;
+.trip-type {
   font-weight: bold;
 }
 
-.row {
+.trip-route {
+  color: #374151;
+  line-height: 1.6;
+  margin-top: 8px;
+  word-break: break-word;
+}
+
+.trip-details {
   display: flex;
-  justify-content: space-between;
-  padding: 9px 0;
-  border-bottom: 1px solid #eee;
-  gap: 10px;
+  gap: 15px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  color: #4b5563;
+  font-size: 14px;
+}
+
+.badge {
+  padding: 5px 9px;
+  border-radius: 20px;
+  background: #e5e7eb;
+  font-size: 12px;
+  font-weight: bold;
 }
 
 .empty {
+  padding: 20px;
   text-align: center;
-  color: #777;
-  padding: 25px;
+  color: #6b7280;
+  background: #f9fafb;
+  border-radius: 10px;
 }
 
-.actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+.total {
+  font-weight: bold;
+  color: #059669;
 }
 
-.back {
-  background: #555;
+.small {
+  font-size: 13px;
+  color: #6b7280;
 }
 
-@media (max-width: 500px) {
-  .info-grid {
-    grid-template-columns: 1fr;
-  }
+hr {
+  border: 0;
+  border-top: 1px solid #e5e7eb;
+  margin: 16px 0;
 }
 
 @media print {
@@ -128,13 +178,34 @@ input, select {
     padding: 0;
   }
 
-  .no-print {
-    display: none !important;
-  }
-
   .card {
     box-shadow: none;
     border: 1px solid #ddd;
+    break-inside: avoid;
+  }
+
+  button,
+  .navigation,
+  #shiftSelector {
+    display: none !important;
+  }
+}
+
+@media (max-width: 500px) {
+  .stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  body {
+    padding: 10px;
+  }
+
+  .card {
+    padding: 15px;
+  }
+
+  .stat .value {
+    font-size: 20px;
   }
 }
 </style>
@@ -144,419 +215,11 @@ input, select {
 
 <div class="container">
 
-  <div class="card no-print">
-    <div class="actions">
-      <button class="back" onclick="history.back()">← Terug</button>
-      <button onclick="window.print()">🖨 Print / PDF</button>
-    </div>
-  </div>
-
   <div class="card">
-    <h1>DIENSTAAT</h1>
+    <h1>📋 Dienststaat</h1>
 
-    <div class="date-controls no-print">
-      <button id="prevDay">◀ Vorige dag</button>
+    <div class="navigation">
+      <button class="secondary" id="prevDay">◀</button>
       <input type="date" id="datePicker">
-      <button id="nextDay">Volgende dag ▶</button>
-    </div>
-
-    <div id="shiftSelectorBox" style="display:none; margin-top:15px;">
-      <label for="shiftSelector"><b>Vardiya seç:</b></label>
-      <select id="shiftSelector"></select>
-    </div>
-
-    <p id="selectedDateText"></p>
-    <p id="status"></p>
-  </div>
-
-  <div class="card">
-    <h2>Shift</h2>
-    <div class="info-grid">
-      <div class="info-box">
-        <div class="label">Datum</div>
-        <div class="value" id="datum">—</div>
-      </div>
-
-      <div class="info-box">
-        <div class="label">Aanvang dienst</div>
-        <div class="value" id="startTime">—</div>
-      </div>
-
-      <div class="info-box">
-        <div class="label">Einde dienst</div>
-        <div class="value" id="endTime">—</div>
-      </div>
-
-      <div class="info-box">
-        <div class="label">Totale dienstduur</div>
-        <div class="value" id="totalTime">—</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Dienst op de BCT</h2>
-
-    <div class="row">
-      <span>Rijtijd</span>
-      <strong id="drivingTime">0:00</strong>
-    </div>
-
-    <div class="row">
-      <span>Pauze</span>
-      <strong id="pauseTime">0:00</strong>
-    </div>
-
-    <div class="row">
-      <span>Overige</span>
-      <strong id="otherTime">0:00</strong>
-    </div>
-
-    <div class="row">
-      <span>Totaal</span>
-      <strong id="totalBCT">0:00</strong>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Rit statistieken</h2>
-
-    <div class="row">
-      <span>Aantal ritten</span>
-      <strong id="tripCount">0</strong>
-    </div>
-
-    <div class="row">
-      <span>Totale afstand</span>
-      <strong id="totalDistance">0.00 km</strong>
-    </div>
-
-    <div class="row">
-      <span>Afstand beladen</span>
-      <strong id="loadedDistance">0.00 km</strong>
-    </div>
-
-    <div class="row">
-      <span>Afstand onbeladen</span>
-      <strong id="emptyDistance">0.00 km</strong>
-    </div>
-
-    <div class="row">
-      <span>Aantal activiteiten</span>
-      <strong id="activityCount">0</strong>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Pauzes</h2>
-    <div id="pauseList">Geen pauzes geregistreerd.</div>
-  </div>
-
-</div>
-
-<script>
-"use strict";
-
-const SHIFT_HISTORY_KEY = "taxi_shifts_history";
-const SHIFT_KEY = "taxi_shift";
-const TRIPS_KEY = "taxi_trips";
-
-const datePicker = document.getElementById("datePicker");
-const shiftSelector = document.getElementById("shiftSelector");
-const shiftSelectorBox = document.getElementById("shiftSelectorBox");
-
-function readStorage(key, fallback) {
-  try {
-    return JSON.parse(localStorage.getItem(key)) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function getAllShifts() {
-  let shifts = readStorage(SHIFT_HISTORY_KEY, []);
-
-  if (!Array.isArray(shifts)) shifts = [];
-
-  const current = readStorage(SHIFT_KEY, null);
-
-  // Aktif veya son vardiyayı da geçmiş listesine ekle,
-  // ama aynı vardiyayı iki kez gösterme.
-  if (current && current.startTime) {
-    const exists = shifts.some(s =>
-      (s.id && current.id && s.id === current.id) ||
-      s.startTime === current.startTime
-    );
-
-    if (!exists) shifts.push(current);
-  }
-
-  return shifts;
-}
-
-function getTrips() {
-  const trips = readStorage(TRIPS_KEY, []);
-  return Array.isArray(trips) ? trips : [];
-}
-
-function dateKey(date) {
-  const d = new Date(date);
-  if (isNaN(d)) return "";
-
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-function localDateKeyFromISO(iso) {
-  if (!iso) return "";
-
-  const d = new Date(iso);
-  if (isNaN(d)) return "";
-
-  return dateKey(d);
-}
-
-function formatTime(iso) {
-  if (!iso) return "—";
-
-  return new Date(iso).toLocaleTimeString("nl-BE", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-function formatDateDisplay(date) {
-  if (!date) return "—";
-
-  return new Date(date + "T12:00:00").toLocaleDateString("nl-BE", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric"
-  });
-}
-
-function durationMs(start, end) {
-  if (!start || !end) return 0;
-
-  const result = new Date(end) - new Date(start);
-  return Math.max(0, result);
-}
-
-function formatDuration(ms) {
-  const minutes = Math.floor(Math.max(0, ms) / 60000);
-  const hours = Math.floor(minutes / 60);
-  const remaining = minutes % 60;
-
-  return `${hours}:${String(remaining).padStart(2, "0")}`;
-}
-
-function shiftDuration(shift) {
-  if (!shift?.startTime) return 0;
-
-  const end = shift.endTime || new Date().toISOString();
-
-  return durationMs(shift.startTime, end);
-}
-
-function pauseDuration(shift) {
-  if (!Array.isArray(shift?.pauses)) return 0;
-
-  let total = 0;
-
-  shift.pauses.forEach(p => {
-    const end = p.endTime || new Date().toISOString();
-    total += durationMs(p.startTime, end);
-  });
-
-  return total;
-}
-
-function tripsForShift(shift) {
-  if (!shift) return [];
-
-  const trips = getTrips();
-
-  return trips.filter(t => {
-    if (!t.startTime) return false;
-
-    const tripDate = localDateKeyFromISO(t.startTime);
-    const shiftDate = localDateKeyFromISO(shift.startTime);
-
-    return tripDate === shiftDate &&
-      new Date(t.startTime) >= new Date(shift.startTime) &&
-      (!shift.endTime || new Date(t.startTime) <= new Date(shift.endTime));
-  });
-}
-
-function getShiftsForDate(date) {
-  return getAllShifts()
-    .filter(s => localDateKeyFromISO(s.startTime) === date)
-    .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-}
-
-function renderDate(date) {
-  const shifts = getShiftsForDate(date);
-
-  document.getElementById("selectedDateText").textContent =
-    "Geselecteerde datum: " + formatDateDisplay(date);
-
-  if (!shifts.length) {
-    shiftSelectorBox.style.display = "none";
-    document.getElementById("status").textContent =
-      "Op deze datum is geen opgeslagen dienst gevonden.";
-
-    clearDisplay();
-    return;
-  }
-
-  if (shifts.length > 1) {
-    shiftSelectorBox.style.display = "block";
-
-    shiftSelector.innerHTML = shifts.map((s, i) => {
-      return `<option value="${i}">Dienst ${i + 1} · ${formatTime(s.startTime)}</option>`;
-    }).join("");
-  } else {
-    shiftSelectorBox.style.display = "none";
-  }
-
-  showShift(shifts[Number(shiftSelector.value) || 0], date);
-}
-
-function clearDisplay() {
-  [
-    "datum", "startTime", "endTime", "totalTime",
-    "drivingTime", "pauseTime", "otherTime", "totalBCT",
-    "tripCount", "totalDistance", "loadedDistance",
-    "emptyDistance", "activityCount"
-  ].forEach(id => {
-    document.getElementById(id).textContent =
-      id.includes("Time") || id.includes("BCT") ? "0:00" : "—";
-  });
-
-  document.getElementById("pauseList").textContent =
-    "Geen pauzes geregistreerd.";
-}
-
-function showShift(shift, date) {
-  if (!shift) {
-    clearDisplay();
-    return;
-  }
-
-  document.getElementById("status").textContent =
-    shift.active ? "Dienst is nog actief." : "Dienst afgesloten.";
-
-  document.getElementById("datum").textContent =
-    formatDateDisplay(date);
-
-  document.getElementById("startTime").textContent =
-    formatTime(shift.startTime);
-
-  document.getElementById("endTime").textContent =
-    formatTime(shift.endTime);
-
-  const total = shiftDuration(shift);
-  const pauses = pauseDuration(shift);
-
-  document.getElementById("totalTime").textContent =
-    formatDuration(total);
-
-  document.getElementById("pauseTime").textContent =
-    formatDuration(pauses);
-
-  const trips = tripsForShift(shift);
-
-  let driving = 0;
-  let totalKm = 0;
-  let loadedKm = 0;
-  let emptyKm = 0;
-
-  trips.forEach(t => {
-    driving += durationMs(t.startTime, t.endTime);
-    const km = Number(t.distanceKm || 0);
-
-    totalKm += km;
-
-    // Uber/Bolt/Normal türlerini beladen olarak varsayıyoruz.
-    loadedKm += km;
-  });
-
-  const other = Math.max(0, total - driving - pauses);
-
-  document.getElementById("drivingTime").textContent =
-    formatDuration(driving);
-
-  document.getElementById("otherTime").textContent =
-    formatDuration(other);
-
-  document.getElementById("totalBCT").textContent =
-    formatDuration(total);
-
-  document.getElementById("tripCount").textContent =
-    trips.length;
-
-  document.getElementById("totalDistance").textContent =
-    totalKm.toFixed(2) + " km";
-
-  document.getElementById("loadedDistance").textContent =
-    loadedKm.toFixed(2) + " km";
-
-  document.getElementById("emptyDistance").textContent =
-    emptyKm.toFixed(2) + " km";
-
-  document.getElementById("activityCount").textContent =
-    trips.length;
-
-  renderPauses(shift);
-}
-
-function renderPauses(shift) {
-  const box = document.getElementById("pauseList");
-
-  if (!Array.isArray(shift.pauses) || !shift.pauses.length) {
-    box.textContent = "Geen pauzes geregistreerd.";
-    return;
-  }
-
-  box.innerHTML = shift.pauses.map((p, i) => `
-    <div class="row">
-      <span>Pauze ${i + 1}</span>
-      <strong>${formatTime(p.startTime)} – ${formatTime(p.endTime)}</strong>
-    </div>
-  `).join("");
-}
-
-function refresh() {
-  const date = datePicker.value;
-  renderDate(date);
-}
-
-function moveDate(days) {
-  const d = new Date(datePicker.value + "T12:00:00");
-  d.setDate(d.getDate() + days);
-
-  datePicker.value = dateKey(d);
-  refresh();
-}
-
-document.getElementById("prevDay").addEventListener("click", () => moveDate(-1));
-document.getElementById("nextDay").addEventListener("click", () => moveDate(1));
-datePicker.addEventListener("change", refresh);
-
-shiftSelector.addEventListener("change", () => {
-  const date = datePicker.value;
-  const shifts = getShiftsForDate(date);
-
-  showShift(shifts[Number(shiftSelector.value) || 0], date);
-});
-
-// Vandaag als standaard datum
-datePicker.value = dateKey(new Date());
-refresh();
-</script>
-
-</body>
-</html>
+      <button class="secondary" id="nextDay">▶</button>
+      <button onclick
