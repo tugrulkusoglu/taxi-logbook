@@ -1,6 +1,7 @@
 /* ==========================================
    TAXI LOGBOOK — TAXI-CHIRON-01
-   Version 4.0.0
+   Version 4.1.0
+   GPS + PAUZE + SHIFT HISTORY
    ========================================== */
 
 "use strict";
@@ -11,6 +12,8 @@ const STORAGE_KEY = "taxi_trips";
 const SHIFT_KEY = "taxi_shift";
 const ACTIVE_TRIP_KEY = "taxi_active_trip";
 const PENDING_TRIP_KEY = "taxi_pending_trip";
+const SHIFT_HISTORY_KEY = "taxi_shifts_history";
+
 const DOUBLE_CLICK_MS = 1500;
 
 let activeTrip = null;
@@ -59,15 +62,35 @@ function saveShift(shift) {
   localStorage.setItem(SHIFT_KEY, JSON.stringify(shift));
 }
 
+function getShiftHistory() {
+  try {
+    const data = JSON.parse(
+      localStorage.getItem(SHIFT_HISTORY_KEY) || "[]"
+    );
+
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveShiftHistory(history) {
+  localStorage.setItem(SHIFT_HISTORY_KEY, JSON.stringify(history));
+}
+
 function loadData() {
   try {
-    activeTrip = JSON.parse(localStorage.getItem(ACTIVE_TRIP_KEY) || "null");
+    activeTrip = JSON.parse(
+      localStorage.getItem(ACTIVE_TRIP_KEY) || "null"
+    );
   } catch {
     activeTrip = null;
   }
 
   try {
-    pendingTrip = JSON.parse(localStorage.getItem(PENDING_TRIP_KEY) || "null");
+    pendingTrip = JSON.parse(
+      localStorage.getItem(PENDING_TRIP_KEY) || "null"
+    );
   } catch {
     pendingTrip = null;
   }
@@ -75,7 +98,10 @@ function loadData() {
 
 function saveActiveTrip() {
   if (activeTrip) {
-    localStorage.setItem(ACTIVE_TRIP_KEY, JSON.stringify(activeTrip));
+    localStorage.setItem(
+      ACTIVE_TRIP_KEY,
+      JSON.stringify(activeTrip)
+    );
   } else {
     localStorage.removeItem(ACTIVE_TRIP_KEY);
   }
@@ -83,7 +109,10 @@ function saveActiveTrip() {
 
 function savePendingTrip() {
   if (pendingTrip) {
-    localStorage.setItem(PENDING_TRIP_KEY, JSON.stringify(pendingTrip));
+    localStorage.setItem(
+      PENDING_TRIP_KEY,
+      JSON.stringify(pendingTrip)
+    );
   } else {
     localStorage.removeItem(PENDING_TRIP_KEY);
   }
@@ -115,7 +144,9 @@ function getPosition() {
         accuracy: position.coords.accuracy,
         time: position.timestamp
       }),
-      error => reject(new Error("GPS konumu alınamadı: " + error.message)),
+      error => reject(
+        new Error("GPS konumu alınamadı: " + error.message)
+      ),
       {
         enableHighAccuracy: true,
         timeout: 15000,
@@ -141,7 +172,10 @@ function distanceBetween(a, b) {
     Math.cos(lat2) *
     Math.sin(dLon / 2) ** 2;
 
-  return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  return 2 * R * Math.atan2(
+    Math.sqrt(x),
+    Math.sqrt(1 - x)
+  );
 }
 
 function addGpsPoint(position) {
@@ -195,6 +229,7 @@ function stopGpsTracking() {
   if (gpsWatcher !== null && navigator.geolocation) {
     navigator.geolocation.clearWatch(gpsWatcher);
   }
+
   gpsWatcher = null;
 }
 
@@ -210,11 +245,14 @@ async function startShift() {
   if (button) button.disabled = true;
 
   const shift = {
+    id: Date.now(),
     active: true,
     startTime: nowISO(),
     startPosition: null,
     endTime: null,
-    endPosition: null
+    endPosition: null,
+    pauses: [],
+    pauseActive: false
   };
 
   saveShift(shift);
@@ -227,6 +265,7 @@ async function startShift() {
   getPosition()
     .then(position => {
       const current = getShift();
+
       if (current?.active) {
         current.startPosition = position;
         saveShift(current);
@@ -235,6 +274,59 @@ async function startShift() {
     })
     .catch(error => console.warn("Vardiya GPS:", error.message));
 }
+
+/* ---------- PAUSE / PAUZE ---------- */
+
+function togglePause() {
+  const shift = getShift();
+
+  if (!shift?.active) {
+    alert("Önce vardiyayı başlat.");
+    return;
+  }
+
+  if (activeTrip) {
+    alert("Pauze başlatmadan önce aktif yolculuğu bitir.");
+    return;
+  }
+
+  shift.pauses = Array.isArray(shift.pauses)
+    ? shift.pauses
+    : [];
+
+  const time = nowISO();
+
+  if (shift.pauseActive) {
+    // PAUZE BİTİR
+    const openPause = shift.pauses.find(p => !p.endTime);
+
+    if (openPause) {
+      openPause.endTime = time;
+    }
+
+    shift.pauseActive = false;
+
+    saveShift(shift);
+    render();
+
+    alert("Pauze bitti. Vardiya devam ediyor.");
+  } else {
+    // PAUZE BAŞLAT
+    shift.pauses.push({
+      startTime: time,
+      endTime: null
+    });
+
+    shift.pauseActive = true;
+
+    saveShift(shift);
+    render();
+
+    alert("Pauze başladı.");
+  }
+}
+
+/* ---------- END SHIFT ---------- */
 
 async function endShift() {
   const shift = getShift();
@@ -249,28 +341,71 @@ async function endShift() {
     return;
   }
 
-  if (!confirm("Vardiyayı bitirmek istiyor musun?")) return;
+  if (!confirm("Vardiyayı bitirmek istiyor musun?")) {
+    return;
+  }
+
+  const endTime = nowISO();
+
+  // Açık pauze varsa otomatik kapat
+  if (shift.pauseActive) {
+    const openPause = (shift.pauses || []).find(p => !p.endTime);
+
+    if (openPause) {
+      openPause.endTime = endTime;
+    }
+
+    shift.pauseActive = false;
+  }
 
   shift.active = false;
-  shift.endTime = nowISO();
+  shift.endTime = endTime;
 
   try {
     shift.endPosition = await getPosition();
   } catch (error) {
-    console.warn(error.message);
+    console.warn("Vardiya bitiş GPS:", error.message);
   }
 
+  // Vardiya arşivi
+  const history = getShiftHistory();
+
+  // Aynı vardiyanın iki kez kaydedilmesini önle
+  const shiftId = shift.id || shift.startTime;
+
+  const exists = history.some(s =>
+    String(s.id || s.startTime) === String(shiftId)
+  );
+
+  if (!exists) {
+    history.push({
+      ...shift,
+      id: shiftId
+    });
+
+    saveShiftHistory(history);
+  }
+
+  // Son vardiyayı eski sistemle uyumluluk için sakla
   saveShift(shift);
+
   render();
 
-  alert("Vardiya bitti.");
+  alert("Vardiya bitti ve arşive kaydedildi.");
 }
 
 /* ---------- TRIP START ---------- */
 
 function startTrip(kind) {
-  if (!getShift()?.active) {
+  const shift = getShift();
+
+  if (!shift?.active) {
     alert("Önce vardiyayı başlat.");
+    return;
+  }
+
+  if (shift.pauseActive) {
+    alert("Pauze sırasında yolculuk başlatamazsın. Önce pauzeyi bitir.");
     return;
   }
 
@@ -303,12 +438,14 @@ function startTrip(kind) {
 
       activeTrip.startPosition = position;
       activeTrip.pickup = "GPS";
+
       activeTrip.route.push({
         lat: position.lat,
         lon: position.lon,
         accuracy: position.accuracy,
         time: position.time
       });
+
       activeTrip.lastPoint = {
         lat: position.lat,
         lon: position.lon,
@@ -336,6 +473,7 @@ function handleTypeClick(kind) {
   ) {
     lastClickKind = null;
     lastClickTime = 0;
+
     startTrip(kind);
     return;
   }
@@ -344,7 +482,10 @@ function handleTypeClick(kind) {
   lastClickTime = time;
 
   setTimeout(() => {
-    if (lastClickKind === kind && Date.now() - lastClickTime >= DOUBLE_CLICK_MS) {
+    if (
+      lastClickKind === kind &&
+      Date.now() - lastClickTime >= DOUBLE_CLICK_MS
+    ) {
       lastClickKind = null;
     }
   }, DOUBLE_CLICK_MS + 50);
@@ -375,313 +516,4 @@ async function finishTrip() {
 
   activeTrip.lastPoint = null;
 
-  pendingTrip = { ...activeTrip };
-  savePendingTrip();
-
-  activeTrip = null;
-  saveActiveTrip();
-
-  renderFareCard();
-  render();
-}
-
-function renderFareCard() {
-  const card = document.getElementById("fareCard");
-  const details = document.getElementById("tripDetails");
-
-  if (!card || !pendingTrip) return;
-
-  const distanceKm = (pendingTrip.distanceMeters || 0) / 1000;
-
-  details.innerHTML = `
-    <p><b>Tür:</b> ${escapeHTML(pendingTrip.kind.toUpperCase())}</p>
-    <p><b>Başlangıç:</b> ${formatDate(pendingTrip.startTime)}</p>
-    <p><b>Bitiş:</b> ${formatDate(pendingTrip.endTime)}</p>
-    <p><b>Alış:</b> ${escapeHTML(pendingTrip.pickup)}</p>
-    <p><b>Varış:</b> ${escapeHTML(pendingTrip.dropoff)}</p>
-    <p><b>Mesafe:</b> ${distanceKm.toFixed(2)} km</p>
-  `;
-
-  card.hidden = false;
-
-  const fareInput = document.getElementById("tripFare");
-  if (fareInput) fareInput.value = "";
-}
-
-function completeTrip() {
-  if (!pendingTrip) return;
-
-  const fareInput = document.getElementById("tripFare");
-  const fare = Number(fareInput?.value);
-
-  if (!Number.isFinite(fare) || fare < 0) {
-    alert("Geçerli bir ücret gir.");
-    return;
-  }
-
-  pendingTrip.fare = fare;
-  pendingTrip.distanceKm =
-    (pendingTrip.distanceMeters || 0) / 1000;
-
-  const trips = getTrips();
-  trips.push(pendingTrip);
-  saveTrips(trips);
-
-  pendingTrip = null;
-  savePendingTrip();
-
-  const card = document.getElementById("fareCard");
-  if (card) card.hidden = true;
-
-  render();
-  alert("Yolculuk kaydedildi.");
-}
-
-function cancelTrip() {
-  if (!pendingTrip) return;
-
-  if (!confirm("Bu yolculuk kaydını iptal etmek istiyor musun?")) return;
-
-  pendingTrip = null;
-  savePendingTrip();
-
-  const card = document.getElementById("fareCard");
-  if (card) card.hidden = true;
-
-  render();
-}
-
-/* ---------- UI ---------- */
-
-function renderActiveTrip() {
-  const box = document.getElementById("activeTrip");
-  const finishButton = document.getElementById("finishTrip");
-
-  if (!box) return;
-
-  if (!activeTrip) {
-    box.textContent = "Aktif yolculuk yok";
-    if (finishButton) finishButton.disabled = true;
-    return;
-  }
-
-  const km = (activeTrip.distanceMeters || 0) / 1000;
-
-  box.innerHTML = `
-    <strong>${escapeHTML(activeTrip.kind.toUpperCase())} yolculuğu aktif</strong><br>
-    Başlangıç: ${formatDate(activeTrip.startTime)}<br>
-    Mesafe: ${km.toFixed(2)} km
-  `;
-
-  if (finishButton) finishButton.disabled = false;
-}
-
-function renderShift() {
-  const shift = getShift();
-  const status = document.getElementById("shiftStatus");
-  const startButton = document.getElementById("startShift");
-  const endButton = document.getElementById("endShift");
-
-  if (!status) return;
-
-  if (shift?.active) {
-    status.innerHTML =
-      "🟢 Vardiya açık · " + escapeHTML(formatDate(shift.startTime));
-
-    if (startButton) startButton.disabled = true;
-    if (endButton) endButton.disabled = false;
-  } else {
-    status.textContent = "Vardiya açık değil";
-
-    if (startButton) startButton.disabled = false;
-    if (endButton) endButton.disabled = true;
-  }
-}
-
-function renderSummary() {
-  const trips = getTrips();
-  const total = trips.reduce((sum, t) => sum + Number(t.fare || 0), 0);
-
-  const box = document.getElementById("summary");
-  if (!box) return;
-
-  box.innerHTML = `
-    <strong>${trips.length} yolculuk</strong> ·
-    <strong>${money(total)}</strong>
-  `;
-}
-
-function renderTrips() {
-  const tbody = document.getElementById("tripRows");
-  if (!tbody) return;
-
-  const trips = getTrips()
-    .slice()
-    .sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
-
-  tbody.innerHTML = "";
-
-  trips.forEach(trip => {
-    const tr = document.createElement("tr");
-
-    tr.innerHTML = `
-      <td>${escapeHTML(formatDate(trip.startTime))}</td>
-      <td>${escapeHTML(trip.kind)}</td>
-      <td>${escapeHTML(trip.pickup || "GPS")}</td>
-      <td>${escapeHTML(trip.dropoff || "GPS")}</td>
-      <td>${Number(trip.distanceKm || 0).toFixed(2)}</td>
-      <td>${money(trip.fare)}</td>
-      <td><button type="button" class="secondary delete-trip" data-id="${trip.id}">Sil</button></td>
-    `;
-
-    tbody.appendChild(tr);
-  });
-}
-
-function deleteTrip(id) {
-  if (!confirm("Bu yolculuk silinsin mi?")) return;
-
-  const trips = getTrips().filter(t => String(t.id) !== String(id));
-  saveTrips(trips);
-  render();
-}
-
-function render() {
-  renderShift();
-  renderActiveTrip();
-  renderSummary();
-  renderTrips();
-}
-
-/* ---------- BACKUP / RESTORE ---------- */
-
-function backupData() {
-  const data = {
-    trips: getTrips(),
-    shift: getShift(),
-    activeTrip,
-    pendingTrip,
-    exportDate: nowISO()
-  };
-
-  const blob = new Blob(
-    [JSON.stringify(data, null, 2)],
-    { type: "application/json" }
-  );
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-
-  a.href = url;
-  a.download = "taxi-backup-" + new Date().toISOString().slice(0, 10) + ".json";
-  a.click();
-
-  URL.revokeObjectURL(url);
-}
-
-function restoreData(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-
-  reader.onload = () => {
-    try {
-      const data = JSON.parse(reader.result);
-
-      let trips = [];
-
-      if (Array.isArray(data)) {
-        trips = data;
-      } else if (Array.isArray(data.trips)) {
-        trips = data.trips;
-      } else {
-        throw new Error("Yedek dosyası formatı tanınmadı.");
-      }
-
-      if (!confirm("Yedek içindeki " + trips.length + " yolculuk kaydı yüklensin mi? Mevcut kayıtlar korunarak birleştirilecek.")) {
-        event.target.value = "";
-        return;
-      }
-
-      // Var olan kayıtları koruyarak birleştir.
-      const current = getTrips();
-      const map = new Map();
-
-      current.forEach(t => map.set(String(t.id ?? JSON.stringify(t)), t));
-      trips.forEach(t => map.set(String(t.id ?? JSON.stringify(t)), t));
-
-      saveTrips(Array.from(map.values()));
-
-      if (!Array.isArray(data)) {
-        if (data.shift) saveShift(data.shift);
-        if (data.activeTrip) {
-          activeTrip = data.activeTrip;
-          saveActiveTrip();
-        }
-        if (data.pendingTrip) {
-          pendingTrip = data.pendingTrip;
-          savePendingTrip();
-        }
-      }
-
-      render();
-      alert("Yedek geri yüklendi.");
-    } catch (error) {
-      alert("Yedek dosyası okunamadı: " + error.message);
-    }
-
-    event.target.value = "";
-  };
-
-  reader.readAsText(file);
-}
-
-/* ---------- EVENTS ---------- */
-
-function bindEvents() {
-  document.getElementById("startShift")
-    ?.addEventListener("click", startShift);
-
-  document.getElementById("endShift")
-    ?.addEventListener("click", endShift);
-
-  document.querySelectorAll(".type-btn").forEach(button => {
-    button.addEventListener("click", () => {
-      handleTypeClick(button.dataset.kind);
-    });
-  });
-
-  document.getElementById("finishTrip")
-    ?.addEventListener("click", finishTrip);
-
-  document.getElementById("completeTrip")
-    ?.addEventListener("click", completeTrip);
-
-  document.getElementById("cancelTrip")
-    ?.addEventListener("click", cancelTrip);
-
-  document.getElementById("backup")
-    ?.addEventListener("click", backupData);
-
-  document.getElementById("restore")
-    ?.addEventListener("change", restoreData);
-
-  document.getElementById("tripRows")
-    ?.addEventListener("click", event => {
-      const button = event.target.closest(".delete-trip");
-      if (button) deleteTrip(button.dataset.id);
-    });
-}
-
-/* ---------- INIT ---------- */
-
-document.addEventListener("DOMContentLoaded", () => {
-  loadData();
-  bindEvents();
-  render();
-
-  if (activeTrip) startGpsTracking();
-
-  if (pendingTrip) renderFareCard();
-});
+  pendingTrip = { ...
