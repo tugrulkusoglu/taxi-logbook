@@ -18,7 +18,6 @@ let pendingTrip = null;
 let gpsWatcher = null;
 let lastClickKind = null;
 let lastClickTime = 0;
-let shiftActionLocked = false;
 
 /* ---------- HELPERS ---------- */
 
@@ -202,14 +201,10 @@ function stopGpsTracking() {
 /* ---------- SHIFT ---------- */
 
 async function startShift() {
-  if (shiftActionLocked) return;
-
   if (getShift()?.active) {
     alert("Vardiya zaten açık.");
     return;
   }
-
-  shiftActionLocked = true;
 
   const button = document.getElementById("startShift");
   if (button) button.disabled = true;
@@ -222,21 +217,17 @@ async function startShift() {
     endPosition: null
   };
 
-  try {
-    saveShift(shift);
-    render();
-    alert("Vardiya başladı.");
-  } finally {
-    shiftActionLocked = false;
-    render();
-  }
+  saveShift(shift);
+  render();
 
-  // GPS arka planda alınır, vardiya başlatılmasını engellemez.
+  if (button) button.disabled = false;
+
+  alert("Vardiya başladı.");
+
   getPosition()
     .then(position => {
       const current = getShift();
-
-      if (current?.active && current.startTime === shift.startTime) {
+      if (current?.active) {
         current.startPosition = position;
         saveShift(current);
         render();
@@ -246,13 +237,10 @@ async function startShift() {
 }
 
 async function endShift() {
-  if (shiftActionLocked) return;
-
   const shift = getShift();
 
-  if (!shift || !shift.active) {
+  if (!shift?.active) {
     alert("Aktif vardiya bulunamadı.");
-    render();
     return;
   }
 
@@ -263,35 +251,22 @@ async function endShift() {
 
   if (!confirm("Vardiyayı bitirmek istiyor musun?")) return;
 
-  shiftActionLocked = true;
-
-  const button = document.getElementById("endShift");
-  if (button) button.disabled = true;
-
-  // GPS beklemeden vardiyayı anında bitir.
+  // GPS beklemeden vardiyayı hemen kapat.
   shift.active = false;
   shift.endTime = nowISO();
   shift.endPosition = null;
 
-  // Önce kaydet: GPS başarısız olsa bile vardiya kapanmış olur.
   saveShift(shift);
-  render();
-
-  shiftActionLocked = false;
   render();
 
   alert("Vardiya bitti.");
 
-  // Bitiş GPS'i yalnızca arka planda alınır.
+  // GPS arka planda alınır.
   getPosition()
     .then(position => {
       const current = getShift();
 
-      if (
-        current &&
-        !current.active &&
-        current.endTime === shift.endTime
-      ) {
+      if (current && !current.active && current.endTime === shift.endTime) {
         current.endPosition = position;
         saveShift(current);
       }
@@ -579,7 +554,7 @@ function renderTrips() {
 function deleteTrip(id) {
   if (!confirm("Bu yolculuk silinsin mi?")) return;
 
-  const trips = getTrips().filter(t => String(t.id) !== String(id);
+  const trips = getTrips().filter(t => String(t.id) !== String(id));
   saveTrips(trips);
   render();
 }
